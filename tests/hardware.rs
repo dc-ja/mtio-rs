@@ -37,11 +37,32 @@ use mtio::{Tape, TapeDevice, TapeError};
 use std::io::{Read, Write};
 use std::path::Path;
 
+/// Timeout applied to the initial `open()` call in [`open_drive`].
+///
+/// Opening a tape device can block indefinitely when no tape is loaded — the
+/// kernel waits for the drive to become ready. Ten seconds is generous for a
+/// drive with a tape already seated; increase it if your drive is slow to spin
+/// up after insertion.
+const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+/// Open the tape device, failing with a clear message if it takes too long.
+///
+/// `TapeDevice::open` can block indefinitely when no tape is loaded (the
+/// kernel waits for the drive to become ready). This wrapper spawns the open
+/// on a background thread and panics with a timeout message if it does not
+/// complete within [`OPEN_TIMEOUT`].
 fn open_drive() -> TapeDevice {
     let path = std::env::var("MTIO_TEST_DEVICE").unwrap_or_else(|_| "/dev/nst0".into());
-    TapeDevice::open(Path::new(&path)).expect("failed to open tape device — is the drive attached and a tape loaded?")
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = TapeDevice::open(Path::new(&path));
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(OPEN_TIMEOUT)
+        .expect("timed out waiting for tape drive — load a tape and retry")
+        .expect("failed to open tape device — is the drive attached?")
 }
 
 /// Read bytes from the current tape file until a filemark boundary (`Ok(0)`).
