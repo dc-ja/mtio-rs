@@ -7,10 +7,22 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
 > Not all AI output has been verified yet.
 
 > [!CAUTION]
-> This crate has not yet been tested with an actual tape drive -- yet.
+> Not all functionality has been tested on real hardware yet, partially due 
+> to lack of support by my test drive.
+
+> [!CAUTION]
+> `MockTape` can not yet be assumed to be a true representation of a tape 
+> drive's behavior. Its implementation is currently based on what the AI has
+> generated, including the tests, and I have yet to verify all of the 
+> assumptions made in either.
+>
+> Most notably, during hardware testing, some of the actual behavior of the
+> Linux `st` driver has been different from that of `MockTape`. The latter
+>  has been updated to reflect that, but it should illustrate just how 
+> (un-)reliable it currently may be.
 
 > [!NOTE]
-> AI was used in the creation of this crate. 
+> AI was used in the creation of this crate.
 > [See below for details](#ai-assistance).
 
 ## Features
@@ -36,11 +48,11 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
 
 ## Background: tape vs. disk
 
-Tape is a *sequential-access* medium. You cannot seek to an arbitrary byte
-position; you move forward or backward by whole *records* (blocks) or
-*filemarks*. Writing at any position discards everything recorded after it.
+Tape is a _sequential-access_ medium. You cannot seek to an arbitrary byte
+position; you move forward or backward by whole _records_ (blocks) or
+_filemarks_. Writing at any position discards everything recorded after it.
 
-Data is grouped into *tape files* separated by filemarks. A `read(2)` at a
+Data is grouped into _tape files_ separated by filemarks. A `read(2)` at a
 filemark boundary returns 0 bytes (like a regular EOF); the caller must call
 `space_filemarks(1)` to step past it. Two consecutive filemarks signal the
 logical end of an archive (the POSIX/GNU `tar` convention).
@@ -173,21 +185,21 @@ Any function that accepts `&mut impl Tape` works with both `TapeDevice` and
 
 ## API overview
 
-| Method | ioctl / operation | Description |
-|---|---|---|
-| `rewind()` | `MTREW` | Seek to BOT |
-| `seek_to_eod()` | `MTEOM` | Seek to end of recorded data |
-| `space_filemarks(n)` | `MTFSF` / `MTBSF` | Space ±n filemarks |
-| `space_records(n)` | `MTFSR` / `MTBSR` | Space ±n records |
-| `write_filemarks(n)` | `MTWEOF` | Write n filemarks |
-| `seek_block(n)` | `MTSEEK` | Seek to logical block n (≤ i32::MAX) |
-| `set_block_size(n)` | `MTSETBLK` | Set fixed block size (0 = variable) |
-| `load()` | `MTLOAD` | SCSI LOAD |
-| `unload()` | `MTUNLOAD` | SCSI UNLOAD / eject |
-| `lock()` | `MTLOCK` | Lock drive door |
-| `unlock()` | `MTUNLOCK` | Unlock drive door |
-| `status()` | `MTIOCGET` | Read drive status and flags |
-| `position()` | `MTIOCPOS` | Read absolute logical block position |
+| Method               | ioctl / operation | Description                          |
+| -------------------- | ----------------- | ------------------------------------ |
+| `rewind()`           | `MTREW`           | Seek to BOT                          |
+| `seek_to_eod()`      | `MTEOM`           | Seek to end of recorded data         |
+| `space_filemarks(n)` | `MTFSF` / `MTBSF` | Space ±n filemarks                   |
+| `space_records(n)`   | `MTFSR` / `MTBSR` | Space ±n records                     |
+| `write_filemarks(n)` | `MTWEOF`          | Write n filemarks                    |
+| `seek_block(n)`      | `MTSEEK`          | Seek to logical block n (≤ i32::MAX) |
+| `set_block_size(n)`  | `MTSETBLK`        | Set fixed block size (0 = variable)  |
+| `load()`             | `MTLOAD`          | SCSI LOAD                            |
+| `unload()`           | `MTUNLOAD`        | SCSI UNLOAD / eject                  |
+| `lock()`             | `MTLOCK`          | Lock drive door                      |
+| `unlock()`           | `MTUNLOCK`        | Unlock drive door                    |
+| `status()`           | `MTIOCGET`        | Read drive status and flags          |
+| `position()`         | `MTIOCPOS`        | Read absolute logical block position |
 
 ## Development notes
 
