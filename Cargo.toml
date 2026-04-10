@@ -10,6 +10,8 @@ rust-version = "1.74"
 [features]
 # Expose MockTape for use in other crates' test suites
 mock = []
+# Enable integration tests against a real tape drive (requires Linux + hardware)
+hardware = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["ioctl"] }

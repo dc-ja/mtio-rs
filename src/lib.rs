@@ -92,9 +92,8 @@ use std::io::{Read, Write};
 /// ## Reading across filemarks
 ///
 /// `Read::read` returns `Ok(0)` at a filemark boundary — identical to EOF on
-/// a regular file. After receiving zero bytes, the caller must call
-/// [`space_filemarks(1)`](Tape::space_filemarks) before reading the next tape
-/// file. Issuing another `read` without spacing will keep returning `Ok(0)`.
+/// a regular file. Issuing another `read` without spacing will keep returning
+/// `Ok(0)`.
 ///
 /// ```text
 /// [record][record][FM][record][record][FM][FM]
@@ -102,6 +101,15 @@ use std::io::{Read, Write};
 ///              read → 0            read → 0
 ///          space_filemarks(1)   (logical end of archive)
 /// ```
+///
+/// **Driver note**: whether `read` returning `Ok(0)` leaves the tape *at* or
+/// *past* the filemark is driver- and firmware-dependent. Some implementations
+/// advance the logical position automatically; others do not. For robust
+/// positioning across multiple tape files, prefer rewinding and using
+/// [`space_filemarks`](Tape::space_filemarks) from a known clean position
+/// rather than calling `space_filemarks(1)` immediately after a read that
+/// returned `Ok(0)`. `MockTape` uses the "not auto-advanced" model, requiring
+/// an explicit `space_filemarks(1)` after each filemark boundary.
 ///
 /// ## Writing across filemarks
 ///

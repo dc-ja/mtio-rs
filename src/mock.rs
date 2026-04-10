@@ -15,10 +15,11 @@
 //! ## Filemark behaviour
 //!
 //! Reading returns `Ok(0)` (zero bytes) when the read cursor reaches the end
-//! of the current tape file — identical to the behaviour of the Linux `st`
-//! driver at a filemark boundary. The caller must call
-//! [`Tape::space_filemarks`]`(1)` to advance past the filemark before reading
-//! the next file.
+//! of the current tape file, mirroring the Linux `st` driver. The filemark is
+//! **auto-consumed**: `file_idx` advances automatically, so the next `read`
+//! call immediately returns data from the following tape file. Do **not** call
+//! [`Tape::space_filemarks`]`(1)` between consecutive tape-file reads; that
+//! would skip one additional filemark.
 //!
 //! ## Overwrite semantics
 //!
@@ -96,10 +97,15 @@ impl Default for MockTape {
 impl Read for MockTape {
     /// Read bytes from the current tape file.
     ///
-    /// Returns `Ok(0)` when the read cursor reaches the end of the current
-    /// tape file (filemark boundary) or when the cursor is past all written
-    /// files (end of data). The caller advances past a filemark with
-    /// [`Tape::space_filemarks`]`(1)`.
+    /// Returns `Ok(0)` at a filemark boundary, mirroring the Linux `st`
+    /// driver: when the last byte of a tape file is consumed, `file_idx` is
+    /// automatically advanced past the filemark so the next `read` begins at
+    /// the start of the following tape file. This means callers should NOT
+    /// call [`Tape::space_filemarks`]`(1)` between consecutive tape-file reads;
+    /// doing so would skip an additional filemark.
+    ///
+    /// Returns `Ok(0)` without advancing when already past all written files
+    /// (end of data).
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.file_idx >= self.files.len() {
             // Past all written files — simulate end-of-data.
@@ -107,7 +113,11 @@ impl Read for MockTape {
         }
         let file = &self.files[self.file_idx];
         if self.byte_idx >= file.len() {
-            // At the end of this tape file: signal filemark boundary.
+            // Filemark boundary: auto-advance past it, matching the Linux st
+            // driver's behaviour. The next read will start at the following
+            // tape file (or return Ok(0) again if that is also empty / EOD).
+            self.file_idx += 1;
+            self.byte_idx = 0;
             return Ok(0);
         }
         let available = file.len() - self.byte_idx;
@@ -312,8 +322,9 @@ mod tests {
         tape.write_filemarks(1).unwrap();
         tape.rewind().unwrap();
 
+        // The filemark after "file0" is auto-consumed when read_file returns
+        // Ok(0), so the next read immediately starts at "file1".
         assert_eq!(read_file(&mut tape), b"file0");
-        tape.space_filemarks(1).unwrap(); // step past the filemark
         assert_eq!(read_file(&mut tape), b"file1");
     }
 
@@ -397,8 +408,8 @@ mod tests {
         tape.rewind().unwrap();
         assert_eq!(read_file(&mut tape), b"new0");
 
-        // File 1 must no longer exist.
-        tape.space_filemarks(1).unwrap();
+        // The filemark after "new0" is auto-consumed. The next read is at EOD
+        // because file 1 no longer exists.
         assert_eq!(read_file(&mut tape), b""); // at EOD
         assert_eq!(tape.file_count(), 1);
     }
@@ -472,8 +483,9 @@ mod tests {
         tape.rewind().unwrap();
         assert_eq!(read_file(&mut tape), b"archive");
 
-        // First filemark crossed.
-        tape.space_filemarks(1).unwrap();
+        // The first filemark was auto-consumed by the read above. A second
+        // consecutive read returning Ok(0) confirms the double filemark: there
+        // is no data between the two filemarks.
         assert_eq!(read_file(&mut tape), b""); // second filemark / EOD
     }
 
