@@ -1,0 +1,18 @@
+[package]
+name = "mtio"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Linux magnetic tape device I/O — safe bindings for the SCSI tape driver ioctl interface"
+repository = "https://github.com/dc-ja/mtio-rs"
+rust-version = "1.74"
+
+[features]
+# Expose MockTape for use in other crates' test suites
+mock = []
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["ioctl"] }
+
+[dependencies]
+thiserror = "2"
