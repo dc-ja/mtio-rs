@@ -199,13 +199,26 @@ impl Tape for MockTape {
     ///
     /// Each call to this method advances `file_idx` by one per filemark and
     /// removes any tape files that existed after the current position
-    /// (overwrite semantics). After this call, `file_idx` points one past the
-    /// last filemark written, ready for the next tape file's data.
+    /// (overwrite semantics). The current file is truncated at `byte_idx`
+    /// first — if that leaves it empty (i.e. `byte_idx == 0`) the slot is
+    /// removed entirely rather than kept as a zero-length placeholder. This
+    /// matches real tape behaviour: writing a filemark at the start of a file
+    /// replaces that file's slot, not appends an empty one before it.
     fn write_filemarks(&mut self, count: u32) -> Result<(), TapeError> {
         self.check_write_protected()?;
         for _ in 0..count {
-            // Discard everything after the current file (tape overwrite).
-            self.files.truncate(self.file_idx + 1);
+            if self.file_idx < self.files.len() {
+                // Truncate the current file at the write head position.
+                self.files[self.file_idx].truncate(self.byte_idx);
+                if self.files[self.file_idx].is_empty() {
+                    // No data was written to this slot; remove it so that no
+                    // empty placeholder is left for scan_files to count.
+                    self.files.truncate(self.file_idx);
+                } else {
+                    // Keep the partial file; discard everything after it.
+                    self.files.truncate(self.file_idx + 1);
+                }
+            }
             // Advance past the filemark to the next file slot.
             self.file_idx += 1;
             self.byte_idx = 0;
@@ -278,6 +291,24 @@ impl Tape for MockTape {
     /// to return to this position. Sub-file byte offsets are not encoded.
     fn position(&mut self) -> Result<u64, TapeError> {
         Ok(self.file_idx as u64)
+    }
+
+    /// Erase from the current position to EOD.
+    ///
+    /// Truncates the current tape file at the current byte offset and removes
+    /// all subsequent files, mirroring the effect of a physical erase. Returns
+    /// [`TapeError::WriteProtected`] if the tape is write-protected.
+    fn erase(&mut self) -> Result<(), TapeError> {
+        self.check_write_protected()?;
+        if self.file_idx < self.files.len() {
+            self.files[self.file_idx].truncate(self.byte_idx);
+            if self.files[self.file_idx].is_empty() {
+                self.files.truncate(self.file_idx);
+            } else {
+                self.files.truncate(self.file_idx + 1);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -633,5 +664,86 @@ mod tests {
 
         tape.space_filemarks(1).unwrap();
         assert!(!tape.status().unwrap().flags.is_bot());
+    }
+
+    // ── erase ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn erase_from_bot_removes_all_files() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+
+        tape.rewind().unwrap();
+        tape.erase().unwrap();
+
+        assert_eq!(tape.file_count(), 0);
+    }
+
+    #[test]
+    fn erase_from_mid_tape_removes_remaining_files() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"keep").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"gone0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"gone1").unwrap();
+        tape.write_filemarks(1).unwrap();
+
+        // Position at the start of file 1 and erase from there.
+        tape.rewind().unwrap();
+        tape.space_filemarks(1).unwrap();
+        tape.erase().unwrap();
+
+        assert_eq!(tape.file_count(), 1);
+        assert_eq!(tape.files()[0], b"keep");
+    }
+
+    #[test]
+    fn erase_from_mid_file_truncates_partial_data() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"abcdef").unwrap();
+        tape.write_filemarks(1).unwrap();
+
+        // Position after the first 3 bytes of file 0 and erase.
+        tape.rewind().unwrap();
+        let mut tmp = [0u8; 3];
+        tape.read_exact(&mut tmp).unwrap();
+        tape.erase().unwrap();
+
+        // The first 3 bytes should be preserved; the rest gone.
+        assert_eq!(tape.file_count(), 1);
+        assert_eq!(tape.files()[0], b"abc");
+    }
+
+    #[test]
+    fn erase_at_eod_is_noop() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.seek_to_eod().unwrap();
+
+        let count_before = tape.file_count();
+        tape.erase().unwrap();
+        assert_eq!(tape.file_count(), count_before);
+    }
+
+    #[test]
+    fn erase_leaves_tape_at_eod() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.erase().unwrap();
+        assert!(tape.status().unwrap().flags.is_eod());
+    }
+
+    #[test]
+    fn erase_on_write_protected_tape_errors() {
+        let mut tape = MockTape::new().write_protected();
+        assert!(tape.erase().is_err());
     }
 }
