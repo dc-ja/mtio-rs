@@ -29,7 +29,7 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
 
 - **Full `MTIOCTOP` coverage** — rewind, seek to EOD, forward/backward space
   over filemarks and records, write filemarks, set block size, load/unload,
-  lock/unlock door.
+  lock/unlock door, physical erase from current position to EOT.
 - **Drive status and position** — `MTIOCGET` (flags, file number, block
   number, drive type) and `MTIOCPOS` (absolute logical block position).
 - **`Tape` trait** — a single trait implemented by both `TapeDevice` and
@@ -156,6 +156,41 @@ fn main() -> Result<(), mtio::TapeError> {
 }
 ```
 
+### Erasing tape
+
+Two levels of erasure are available:
+
+**Logical truncation** — seek to the desired position and write a double
+filemark. Data past that point is unreachable by normal means but is _not_
+magnetically destroyed. Fast, minimal wear.
+
+**Physical erase** — `erase()` issues `MTERASE`, causing the drive's erase
+head to traverse the full remaining tape. All data from the current position
+to EOT is permanently destroyed. This is slow, high-wear, and irreversible.
+It is a magnetic erase, not a cryptographic secure erase.
+
+```rust
+use mtio::{TapeDevice, Tape};
+use std::path::Path;
+
+fn main() -> Result<(), mtio::TapeError> {
+    let mut drive = TapeDevice::open(Path::new("/dev/nst0"))?;
+
+    // Logical truncation: remove the last file by seeking to EOD,
+    // spacing back one filemark, and writing a double filemark.
+    drive.seek_to_eod()?;
+    drive.space_filemarks(-1)?;
+    drive.write_filemarks(2)?;
+
+    // Physical erase from the start of file 2 to EOT.
+    drive.rewind()?;
+    drive.space_filemarks(2)?;
+    drive.erase()?; // WARNING: slow, destructive, high-wear
+
+    Ok(())
+}
+```
+
 ### Testing with MockTape
 
 ```rust
@@ -200,6 +235,7 @@ Any function that accepts `&mut impl Tape` works with both `TapeDevice` and
 | `unlock()`           | `MTUNLOCK`        | Unlock drive door                    |
 | `status()`           | `MTIOCGET`        | Read drive status and flags          |
 | `position()`         | `MTIOCPOS`        | Read absolute logical block position |
+| `erase()`            | `MTERASE`         | Physically erase from current position to EOT |
 
 ## Development notes
 

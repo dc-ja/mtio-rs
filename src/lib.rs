@@ -220,4 +220,22 @@ pub trait Tape: Read + Write {
     /// later passed to [`seek_block`](Tape::seek_block) to return to this
     /// exact position. Subject to the 32-bit limit documented on `seek_block`.
     fn position(&mut self) -> Result<u64, TapeError>;
+
+    /// Physically erase the tape from the current position to EOT.
+    ///
+    /// This is a **destructive, time-consuming, high-wear operation**. The
+    /// erase head traverses the full remaining tape, which takes minutes to
+    /// hours depending on tape length. All data from the current position
+    /// onwards is permanently destroyed.
+    ///
+    /// This is **not** a cryptographic erase; it is a magnetic erase that
+    /// renders data unreadable by normal means. For security-sensitive data,
+    /// consult the drive and media manufacturer's guidance on secure erase.
+    ///
+    /// To erase only from a specific file, seek to that position first using
+    /// [`rewind`](Tape::rewind) and [`space_filemarks`](Tape::space_filemarks)
+    /// before calling this method.
+    ///
+    /// Equivalent to `mt erase`.
+    fn erase(&mut self) -> Result<(), TapeError>;
 }

@@ -171,4 +171,8 @@ impl Tape for TapeDevice {
         unsafe { ioctl::mtiocpos_raw(self.file.as_raw_fd(), &mut raw) }?;
         Ok(raw.mt_blkno as u64)
     }
+
+    fn erase(&mut self) -> Result<(), TapeError> {
+        self.do_op(ioctl::MTERASE, 1)
+    }
 }
