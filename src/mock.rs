@@ -268,8 +268,19 @@ impl Tape for MockTape {
 
     fn status(&mut self) -> Result<TapeStatus, TapeError> {
         let mut bits: i64 = 0;
+        // The mock always has a "tape" loaded and the drive ready.
+        bits |= StatusFlags::ONLINE;
+        // BOT: both file number and block number are zero (driver source:
+        // `if (mt_fileno == 0 && mt_blkno == 0) gstat |= GMT_BOT`).
         if self.file_idx == 0 && self.byte_idx == 0 {
             bits |= StatusFlags::BOT;
+        }
+        // EOF: block number is zero but file number is non-zero — i.e. the
+        // head is positioned at the start of any file after the first
+        // (driver source: `else if (mt_blkno == 0) gstat |= GMT_EOF`).
+        // Mutually exclusive with BOT because the driver uses else-if.
+        if self.file_idx > 0 && self.byte_idx == 0 {
+            bits |= StatusFlags::EOF;
         }
         if self.file_idx >= self.files.len() {
             bits |= StatusFlags::EOD;
@@ -664,6 +675,115 @@ mod tests {
 
         tape.space_filemarks(1).unwrap();
         assert!(!tape.status().unwrap().flags.is_bot());
+    }
+
+    // ── ONLINE flag ───────────────────────────────────────────────────────
+
+    #[test]
+    fn status_online_always_set() {
+        // The mock always has a tape loaded; ONLINE should be set in every
+        // position: BOT, mid-tape, and EOD.
+        let mut tape = MockTape::new();
+        assert!(tape.status().unwrap().flags.is_online(), "not online at BOT/EOD");
+
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        assert!(tape.status().unwrap().flags.is_online(), "not online at BOT");
+
+        tape.space_filemarks(1).unwrap();
+        assert!(tape.status().unwrap().flags.is_online(), "not online at EOD");
+    }
+
+    #[test]
+    fn status_online_set_on_write_protected_tape() {
+        let mut tape = MockTape::new().write_protected();
+        assert!(tape.status().unwrap().flags.is_online());
+    }
+
+    // ── EOF flag ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn status_eof_not_set_at_bot() {
+        // At BOT (file 0, byte 0), EOF must not be set — the driver uses
+        // else-if, so BOT and EOF are mutually exclusive.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        let st = tape.status().unwrap();
+        assert!(st.flags.is_bot());
+        assert!(!st.flags.is_eof());
+    }
+
+    #[test]
+    fn status_eof_set_after_forward_space_to_non_first_file() {
+        // After space_filemarks(1) from BOT, the head is at the start of
+        // file 1 (byte 0). The driver sets GMT_EOF in this position.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.space_filemarks(1).unwrap();
+        let st = tape.status().unwrap();
+        assert!(st.flags.is_eof(), "EOF not set at start of file 1");
+        assert!(!st.flags.is_bot());
+    }
+
+    #[test]
+    fn status_eof_set_after_auto_advance_past_filemark() {
+        // read() returning Ok(0) at a filemark auto-advances to the next
+        // file. At that point (file > 0, byte 0), EOF should be set.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        // Drain file 0 — the Ok(0) at the end auto-advances.
+        read_file(&mut tape);
+        let st = tape.status().unwrap();
+        assert!(st.flags.is_eof(), "EOF not set after auto-advance to file 1");
+    }
+
+    #[test]
+    fn status_eof_cleared_after_reading_into_file() {
+        // Once we've read at least one byte into a file, byte offset > 0
+        // and EOF should be cleared.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.space_filemarks(1).unwrap();
+        let st = tape.status().unwrap();
+        assert!(st.flags.is_eof(), "precondition: EOF set at start of file 1");
+
+        let mut buf = [0u8; 1];
+        tape.read_exact(&mut buf).unwrap();
+        let st = tape.status().unwrap();
+        assert!(!st.flags.is_eof(), "EOF still set after reading into file 1");
+    }
+
+    #[test]
+    fn status_eof_set_at_eod_after_last_filemark() {
+        // After space_filemarks(1) past the last filemark, we're at EOD with
+        // file_idx > 0 and byte_idx == 0: both EOF and EOD should be set.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.space_filemarks(1).unwrap();
+        let st = tape.status().unwrap();
+        assert!(st.flags.is_eof(), "EOF not set at EOD");
+        assert!(st.flags.is_eod(), "EOD not set");
     }
 
     // ── erase ─────────────────────────────────────────────────────────────
