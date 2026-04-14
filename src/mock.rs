@@ -84,7 +84,8 @@ pub struct MockTape {
     /// EOF state machine transitions from `ST_EOD_2` into `ST_EOD`.
     ///
     /// Reset to 0 by any operation that changes the tape position or returns
-    /// actual data.
+    /// actual data, and by any filemark crossing (which is a mid-tape event,
+    /// not a blank-tape read).
     consecutive_zero_reads: u8,
 }
 
@@ -184,12 +185,18 @@ impl Read for MockTape {
     /// (end of data).
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.file_idx >= self.files.len() {
-            // Past all written files — end-of-data.
+            // Past all written files — blank tape (true EOD).
             //
-            // The Linux st driver documents: "End of data is signified by
-            // returning zero bytes for two consecutive reads." After two such
-            // reads, the driver's EOF state machine enters ST_EOD and returns
-            // ENOSPC on any further read. We mirror that here.
+            // Only blank-tape reads advance the EOD state machine. The driver
+            // documents: "End of data is signified by returning zero bytes for
+            // two consecutive reads." Those two reads correspond to driver
+            // states ST_EOD_1 and ST_EOD_2. After them, any further read
+            // enters ST_EOD and returns ENOSPC.
+            //
+            // Filemark crossings (below) are a distinct event and do NOT count
+            // toward this threshold — crossing a mid-tape double-FM (EOA) and
+            // then hitting blank tape are separate things. Only reads that land
+            // on blank tape (file_idx >= files.len()) are counted here.
             self.consecutive_zero_reads = self.consecutive_zero_reads.saturating_add(1);
             if self.consecutive_zero_reads > 2 {
                 return Err(io::Error::new(
@@ -206,17 +213,18 @@ impl Read for MockTape {
             // tape file (or return Ok(0) again if that is also empty / EOD).
             // After crossing a filemark forward, file and block numbers are
             // known again (driver resets drv_block = 0, drv_file += 1).
+            //
+            // Crossing a filemark is a normal mid-tape event — it is NOT a
+            // blank-tape read, so we reset consecutive_zero_reads here rather
+            // than incrementing it. This is what makes EOA (double-FM mid-tape
+            // with more data following) distinguishable from EOD (double-FM at
+            // the end of recorded data): a mid-tape FM crossing resets the
+            // counter, so the subsequent data read never triggers ENOSPC.
             self.file_idx += 1;
             self.byte_idx = 0;
             self.file_known = true;
             self.block_known = true;
-            self.consecutive_zero_reads = self.consecutive_zero_reads.saturating_add(1);
-            if self.consecutive_zero_reads > 2 {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "ENOSPC: end of data (st driver ST_EOD state)",
-                ));
-            }
+            self.consecutive_zero_reads = 0;
             return Ok(0);
         }
         let available = file.len() - self.byte_idx;
@@ -1061,20 +1069,31 @@ mod tests {
     }
 
     #[test]
-    fn double_filemark_triggers_enospc_on_third_zero_read() {
+    fn double_filemark_triggers_enospc_on_fourth_zero_read() {
         // A double filemark is the conventional EOA marker. Reading through
-        // both filemarks consumes two zero-byte reads; the third read errors.
+        // the tape produces zeros from two distinct sources:
+        //
+        //   zero #1  — FM #1 crossing (filemark boundary; resets the blank-tape
+        //               counter because this is a mid-tape event, not blank tape)
+        //   zero #2  — blank tape, ST_EOD_1 (consecutive_zero_reads = 1)
+        //   zero #3  — blank tape, ST_EOD_2 (consecutive_zero_reads = 2)
+        //   ENOSPC   — blank tape, ST_EOD   (consecutive_zero_reads = 3 > 2)
+        //
+        // Contrast with a mid-tape EOA (more data after the double FM): in that
+        // case FM #1 and FM #2 crossings both reset the counter, so the data
+        // from the next archive is reached without ENOSPC ever firing.
         let mut tape = MockTape::new();
         tape.write_all(b"data").unwrap();
-        tape.write_filemarks(2).unwrap(); // double filemark = EOA
+        tape.write_filemarks(2).unwrap(); // double filemark = EOA at EOD
         tape.rewind().unwrap();
 
-        // Drain the data file.
-        read_file(&mut tape); // consumes data, returns Ok(0) at FM #1 (zero #1)
-        // Second zero-byte read: crossing FM #2 (or blank past it).
-        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "second zero read");
-        // Third read must error.
-        assert!(tape.read(&mut [0u8; 4]).is_err(), "third read should error");
+        // Drain the data file. read_file() exits when read() returns Ok(0) at
+        // FM #1, which resets consecutive_zero_reads to 0.
+        read_file(&mut tape);
+        // FM #1 was auto-consumed; file_idx is now past files.len() (blank tape).
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "second zero (ST_EOD_1)");
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "third zero (ST_EOD_2)");
+        assert!(tape.read(&mut [0u8; 4]).is_err(), "fourth read should return ENOSPC");
     }
 
     #[test]
@@ -1111,10 +1130,11 @@ mod tests {
     }
 
     #[test]
-    fn data_read_resets_eod_state_machine() {
-        // Reading actual data must reset the consecutive-zero counter so
-        // interleaved reads (data, filemark, data, filemark) do not
-        // accidentally accumulate towards ENOSPC.
+    fn fm_crossing_resets_eod_state_machine() {
+        // Filemark crossings reset consecutive_zero_reads to 0 because they
+        // are mid-tape events, not blank-tape reads. This means interleaved
+        // reads across multiple files never accumulate toward ENOSPC, and a
+        // mid-tape double-FM (EOA with more data after it) is safely readable.
         let mut tape = MockTape::new();
         tape.write_all(b"a").unwrap();
         tape.write_filemarks(1).unwrap();
@@ -1122,12 +1142,12 @@ mod tests {
         tape.write_filemarks(1).unwrap();
         tape.rewind().unwrap();
 
-        read_file(&mut tape); // zero #1 (filemark after "a")
-        read_file(&mut tape); // data resets counter, then zero #1 again (filemark after "b")
-        // We've only seen one zero in a row since the last data read.
-        // One more Ok(0) is still allowed before ENOSPC.
-        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0);
-        assert!(tape.read(&mut [0u8; 4]).is_err());
+        read_file(&mut tape); // crosses FM after "a" → resets counter to 0
+        read_file(&mut tape); // reads "b", then crosses FM after "b" → resets counter to 0
+        // Now at blank tape. Two Ok(0)s are allowed before ENOSPC.
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "blank tape ST_EOD_1");
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "blank tape ST_EOD_2");
+        assert!(tape.read(&mut [0u8; 4]).is_err(), "blank tape ST_EOD → ENOSPC");
     }
 
     // ── ONLINE flag ───────────────────────────────────────────────────────
