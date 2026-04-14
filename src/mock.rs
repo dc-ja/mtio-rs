@@ -46,6 +46,17 @@ pub struct MockTape {
     byte_idx: usize,
     /// When `true`, [`Write`] and [`Tape::write_filemarks`] return an error.
     write_protected: bool,
+    /// Whether a data write has occurred since the last filemark was written.
+    ///
+    /// The Linux `st` driver automatically writes one filemark before executing
+    /// rewind (`MTREW`), backward-space-filemarks (`MTBSF`), absolute seek
+    /// (`MTSEEK`), or offline/eject (`MTUNLOAD`) when the previous operation
+    /// was a write. This ensures every tape file is properly closed before the
+    /// head moves away from the write position.
+    ///
+    /// Set by [`Write::write`]; cleared by [`Tape::write_filemarks`] (when
+    /// `count > 0`) and by the auto-filemark itself.
+    dirty: bool,
     /// Whether the file number is known and can be reported in [`status`].
     ///
     /// The Linux `st` driver sets `drv_file = -1` (unknown) after `MTSEEK`
@@ -85,6 +96,7 @@ impl MockTape {
             file_idx: 0,
             byte_idx: 0,
             write_protected: false,
+            dirty: false,
             file_known: true,
             block_known: true,
             consecutive_zero_reads: 0,
@@ -115,6 +127,38 @@ impl MockTape {
         } else {
             Ok(())
         }
+    }
+
+    /// Write one filemark if a data write is pending (the `dirty` flag is set).
+    ///
+    /// The Linux `st` driver does this silently before `MTREW`, `MTBSF`,
+    /// `MTSEEK`, and `MTUNLOAD` when the last operation was a write. It ensures
+    /// every tape file is properly closed before the head moves away.
+    ///
+    /// This method replicates the internal `write_behind` / auto-filemark path
+    /// in the driver. It writes the filemark directly (bypassing the
+    /// write-protect check that guards the public `write_filemarks`) because
+    /// the driver also ignores write-protect for this implicit filemark — the
+    /// data was already written past the protection check.
+    fn flush_if_dirty(&mut self) -> Result<(), TapeError> {
+        if !self.dirty {
+            return Ok(());
+        }
+        // Truncate and close the current file slot, then advance past the FM.
+        if self.file_idx < self.files.len() {
+            self.files[self.file_idx].truncate(self.byte_idx);
+            if self.files[self.file_idx].is_empty() {
+                self.files.truncate(self.file_idx);
+            } else {
+                self.files.truncate(self.file_idx + 1);
+            }
+        }
+        self.file_idx += 1;
+        self.byte_idx = 0;
+        self.file_known = true;
+        self.block_known = true;
+        self.dirty = false;
+        Ok(())
     }
 }
 
@@ -219,6 +263,7 @@ impl Write for MockTape {
         self.file_known = true;
         self.block_known = true;
         self.consecutive_zero_reads = 0;
+        self.dirty = true;
         Ok(buf.len())
     }
 
@@ -231,6 +276,7 @@ impl Write for MockTape {
 
 impl Tape for MockTape {
     fn rewind(&mut self) -> Result<(), TapeError> {
+        self.flush_if_dirty()?;
         self.file_idx = 0;
         self.byte_idx = 0;
         self.file_known = true;
@@ -251,6 +297,11 @@ impl Tape for MockTape {
     }
 
     fn space_filemarks(&mut self, count: i32) -> Result<(), TapeError> {
+        if count < 0 {
+            // MTBSF triggers the auto-filemark flush; MTFSF does not (the
+            // driver only flushes on backward motion / seek / rewind).
+            self.flush_if_dirty()?;
+        }
         if count >= 0 {
             // MTFSF: file number advances, block number resets to 0 (known).
             self.file_idx = self.file_idx.saturating_add(count as usize);
@@ -285,6 +336,9 @@ impl Tape for MockTape {
     /// replaces that file's slot, not appends an empty one before it.
     fn write_filemarks(&mut self, count: u32) -> Result<(), TapeError> {
         self.check_write_protected()?;
+        if count > 0 {
+            self.dirty = false;
+        }
         for _ in 0..count {
             if self.file_idx < self.files.len() {
                 // Truncate the current file at the write head position.
@@ -315,6 +369,7 @@ impl Tape for MockTape {
     /// for testing round-trip seek behaviour; it does not model sub-file block
     /// addressing.
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError> {
+        self.flush_if_dirty()?;
         self.file_idx = block as usize;
         self.byte_idx = 0;
         // MTSEEK: both file and block number become unknown — the driver sets
@@ -338,8 +393,9 @@ impl Tape for MockTape {
         Ok(())
     }
 
-    /// No-op: the mock has no physical cartridge mechanism to eject.
+    /// Flush any pending write and simulate ejecting the cartridge.
     fn unload(&mut self) -> Result<(), TapeError> {
+        self.flush_if_dirty()?;
         Ok(())
     }
 
@@ -762,6 +818,112 @@ mod tests {
 
         tape.space_filemarks(1).unwrap();
         assert!(!tape.status().unwrap().flags.is_bot());
+    }
+
+    // ── Auto-filemark on motion after write ───────────────────────────────
+
+    #[test]
+    fn rewind_after_write_inserts_auto_filemark() {
+        // The driver writes one filemark before MTREW if the last operation
+        // was a write. After rewind the file should be closed and readable.
+        let mut tape = MockTape::new();
+        tape.write_all(b"hello").unwrap();
+        // No explicit write_filemarks — rewind should close the file.
+        tape.rewind().unwrap();
+
+        let data = read_file(&mut tape);
+        assert_eq!(data, b"hello", "data should be readable after auto-FM + rewind");
+        assert_eq!(tape.file_count(), 1);
+    }
+
+    #[test]
+    fn bsf_after_write_inserts_auto_filemark() {
+        // MTBSF should trigger the auto-filemark flush before moving backward.
+        // After flush the auto-FM advances file_idx past the new filemark;
+        // BSF(-2) then lands us before file 0, so we can scan both files.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        // No closing filemark. BSF(-2) flushes file1's FM first, then moves
+        // backward 2 positions: past the auto-FM to file1, then to file0.
+        tape.space_filemarks(-2).unwrap();
+
+        // We're now at the start of file0. Both files should be readable.
+        assert_eq!(read_file(&mut tape), b"file0");
+        assert_eq!(read_file(&mut tape), b"file1");
+        assert_eq!(tape.file_count(), 2);
+    }
+
+    #[test]
+    fn seek_block_after_write_inserts_auto_filemark() {
+        // MTSEEK should flush before seeking.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        let pos = tape.position().unwrap(); // position before the flush
+        tape.seek_block(0).unwrap(); // should flush then seek to BOT
+
+        // After the auto-FM and seek, rewind to read back.
+        tape.rewind().unwrap();
+        let data = read_file(&mut tape);
+        assert_eq!(data, b"data");
+        let _ = pos; // used above for context
+    }
+
+    #[test]
+    fn unload_after_write_inserts_auto_filemark() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.unload().unwrap();
+        assert_eq!(tape.file_count(), 1, "file should be closed by unload auto-FM");
+    }
+
+    #[test]
+    fn explicit_filemark_clears_dirty_no_double_fm() {
+        // If write_filemarks is called explicitly, the dirty flag is cleared
+        // and no second filemark should be written on the next motion.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap(); // explicit FM — clears dirty
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap(); // explicit FM — clears dirty
+        tape.rewind().unwrap();           // no auto-FM should fire
+
+        assert_eq!(read_file(&mut tape), b"file0");
+        assert_eq!(read_file(&mut tape), b"file1");
+        assert_eq!(tape.file_count(), 2);
+    }
+
+    #[test]
+    fn forward_space_after_write_does_not_auto_filemark() {
+        // MTFSF does NOT trigger the auto-filemark flush (only backward motion
+        // and rewind do). The write buffer stays dirty until closed explicitly.
+        // This test verifies MTFSF does not disturb an open write.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        // Forward space: no flush expected.
+        tape.space_filemarks(1).unwrap();
+        // The dirty flag is still set; close explicitly now.
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        assert_eq!(read_file(&mut tape), b"file0");
+        assert_eq!(read_file(&mut tape), b"file1");
+    }
+
+    #[test]
+    fn rewind_after_write_file_number_is_correct() {
+        // After the auto-filemark fires, the file count and index must be
+        // consistent: one file written, tape rewound to 0.
+        let mut tape = MockTape::new();
+        tape.write_all(b"abc").unwrap();
+        tape.rewind().unwrap();
+        let st = tape.status().unwrap();
+        assert_eq!(st.file_number, 0);
+        assert!(st.flags.is_bot());
+        assert_eq!(tape.file_count(), 1);
     }
 
     // ── Unknown position (MTBSF / MTSEEK) ────────────────────────────────
