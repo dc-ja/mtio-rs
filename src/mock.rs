@@ -46,6 +46,19 @@ pub struct MockTape {
     byte_idx: usize,
     /// When `true`, [`Write`] and [`Tape::write_filemarks`] return an error.
     write_protected: bool,
+    /// Number of consecutive zero-byte `read()` calls (filemark crossings or
+    /// reads past EOD) since the last call that returned actual data or the
+    /// last positioning operation.
+    ///
+    /// The Linux `st` driver documents: *"End of data is signified by
+    /// returning zero bytes for two consecutive reads."* After two such reads
+    /// any further read returns `ENOSPC` (modelled here as an
+    /// `io::ErrorKind::Other` error), matching driver behaviour where the
+    /// EOF state machine transitions from `ST_EOD_2` into `ST_EOD`.
+    ///
+    /// Reset to 0 by any operation that changes the tape position or returns
+    /// actual data.
+    consecutive_zero_reads: u8,
 }
 
 impl MockTape {
@@ -56,6 +69,7 @@ impl MockTape {
             file_idx: 0,
             byte_idx: 0,
             write_protected: false,
+            consecutive_zero_reads: 0,
         }
     }
 
@@ -108,7 +122,19 @@ impl Read for MockTape {
     /// (end of data).
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.file_idx >= self.files.len() {
-            // Past all written files — simulate end-of-data.
+            // Past all written files — end-of-data.
+            //
+            // The Linux st driver documents: "End of data is signified by
+            // returning zero bytes for two consecutive reads." After two such
+            // reads, the driver's EOF state machine enters ST_EOD and returns
+            // ENOSPC on any further read. We mirror that here.
+            self.consecutive_zero_reads = self.consecutive_zero_reads.saturating_add(1);
+            if self.consecutive_zero_reads > 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "ENOSPC: end of data (st driver ST_EOD state)",
+                ));
+            }
             return Ok(0);
         }
         let file = &self.files[self.file_idx];
@@ -118,12 +144,23 @@ impl Read for MockTape {
             // tape file (or return Ok(0) again if that is also empty / EOD).
             self.file_idx += 1;
             self.byte_idx = 0;
+            self.consecutive_zero_reads = self.consecutive_zero_reads.saturating_add(1);
+            if self.consecutive_zero_reads > 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "ENOSPC: end of data (st driver ST_EOD state)",
+                ));
+            }
             return Ok(0);
         }
         let available = file.len() - self.byte_idx;
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&file[self.byte_idx..self.byte_idx + n]);
         self.byte_idx += n;
+        // Any non-zero read resets the consecutive-zero counter.
+        if n > 0 {
+            self.consecutive_zero_reads = 0;
+        }
         Ok(n)
     }
 }
@@ -154,6 +191,7 @@ impl Write for MockTape {
         // Remove all tape files that follow (tape overwrite semantics).
         self.files.truncate(self.file_idx + 1);
         self.byte_idx += buf.len();
+        self.consecutive_zero_reads = 0;
         Ok(buf.len())
     }
 
@@ -168,6 +206,7 @@ impl Tape for MockTape {
     fn rewind(&mut self) -> Result<(), TapeError> {
         self.file_idx = 0;
         self.byte_idx = 0;
+        self.consecutive_zero_reads = 0;
         Ok(())
     }
 
@@ -176,6 +215,7 @@ impl Tape for MockTape {
         // drive sitting just after the last filemark before blank tape.
         self.file_idx = self.files.len();
         self.byte_idx = 0;
+        self.consecutive_zero_reads = 0;
         Ok(())
     }
 
@@ -186,6 +226,7 @@ impl Tape for MockTape {
             self.file_idx = self.file_idx.saturating_sub((-count) as usize);
         }
         self.byte_idx = 0;
+        self.consecutive_zero_reads = 0;
         Ok(())
     }
 
@@ -235,6 +276,7 @@ impl Tape for MockTape {
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError> {
         self.file_idx = block as usize;
         self.byte_idx = 0;
+        self.consecutive_zero_reads = 0;
         Ok(())
     }
 
@@ -675,6 +717,105 @@ mod tests {
 
         tape.space_filemarks(1).unwrap();
         assert!(!tape.status().unwrap().flags.is_bot());
+    }
+
+    // ── EOD state machine ─────────────────────────────────────────────────
+
+    #[test]
+    fn read_at_eod_first_two_calls_return_zero() {
+        // The first two reads past all recorded data must return Ok(0), not an
+        // error — the double-zero is the signal that EOD has been reached.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.seek_to_eod().unwrap();
+
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "first EOD read");
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "second EOD read");
+    }
+
+    #[test]
+    fn read_past_double_zero_returns_enospc() {
+        // After two consecutive zero-byte reads at EOD, further reads return
+        // an error (driver ST_EOD state → ENOSPC).
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.seek_to_eod().unwrap();
+
+        tape.read(&mut [0u8; 4]).unwrap(); // 1st zero
+        tape.read(&mut [0u8; 4]).unwrap(); // 2nd zero
+        assert!(tape.read(&mut [0u8; 4]).is_err(), "3rd read should error");
+    }
+
+    #[test]
+    fn double_filemark_triggers_enospc_on_third_zero_read() {
+        // A double filemark is the conventional EOA marker. Reading through
+        // both filemarks consumes two zero-byte reads; the third read errors.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(2).unwrap(); // double filemark = EOA
+        tape.rewind().unwrap();
+
+        // Drain the data file.
+        read_file(&mut tape); // consumes data, returns Ok(0) at FM #1 (zero #1)
+        // Second zero-byte read: crossing FM #2 (or blank past it).
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0, "second zero read");
+        // Third read must error.
+        assert!(tape.read(&mut [0u8; 4]).is_err(), "third read should error");
+    }
+
+    #[test]
+    fn rewind_resets_eod_state_machine() {
+        // After hitting the ENOSPC state, a rewind must clear the counter so
+        // normal reads work again from the start.
+        let mut tape = MockTape::new();
+        tape.write_all(b"hello").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.seek_to_eod().unwrap();
+
+        tape.read(&mut [0u8; 4]).unwrap();
+        tape.read(&mut [0u8; 4]).unwrap();
+        assert!(tape.read(&mut [0u8; 4]).is_err());
+
+        tape.rewind().unwrap();
+        assert_eq!(read_file(&mut tape), b"hello");
+    }
+
+    #[test]
+    fn space_filemarks_resets_eod_state_machine() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.seek_to_eod().unwrap();
+
+        tape.read(&mut [0u8; 4]).unwrap();
+        tape.read(&mut [0u8; 4]).unwrap();
+        assert!(tape.read(&mut [0u8; 4]).is_err());
+
+        // Space backward to file 0 and verify the error state is gone.
+        tape.space_filemarks(-1).unwrap();
+        assert_eq!(read_file(&mut tape), b"data");
+    }
+
+    #[test]
+    fn data_read_resets_eod_state_machine() {
+        // Reading actual data must reset the consecutive-zero counter so
+        // interleaved reads (data, filemark, data, filemark) do not
+        // accidentally accumulate towards ENOSPC.
+        let mut tape = MockTape::new();
+        tape.write_all(b"a").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"b").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        read_file(&mut tape); // zero #1 (filemark after "a")
+        read_file(&mut tape); // data resets counter, then zero #1 again (filemark after "b")
+        // We've only seen one zero in a row since the last data read.
+        // One more Ok(0) is still allowed before ENOSPC.
+        assert_eq!(tape.read(&mut [0u8; 4]).unwrap(), 0);
+        assert!(tape.read(&mut [0u8; 4]).is_err());
     }
 
     // ── ONLINE flag ───────────────────────────────────────────────────────
