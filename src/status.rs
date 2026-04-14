@@ -14,6 +14,14 @@ pub struct TapeStatus {
     /// Current record number within the current tape file. Resets to 0 at
     /// each filemark boundary.
     pub block_number: i32,
+    /// Current block (record) size in bytes, from the `mt_dsreg` field of
+    /// `struct mtget` (bits 0–23, `MT_ST_BLKSIZE_MASK`).
+    ///
+    /// `0` means variable-length mode — each `write(2)` call determines the
+    /// size of that record individually. Any non-zero value is the fixed block
+    /// size: every record on tape is exactly this many bytes, and all `read(2)`
+    /// and `write(2)` buffers must be multiples of it.
+    pub block_size: u32,
     /// Generic device-independent status flags decoded from `mt_gstat`.
     pub flags: StatusFlags,
 }

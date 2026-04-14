@@ -46,6 +46,13 @@ pub struct MockTape {
     byte_idx: usize,
     /// When `true`, [`Write`] and [`Tape::write_filemarks`] return an error.
     write_protected: bool,
+    /// Current block (record) size in bytes. `0` = variable-length mode
+    /// (the default). Any non-zero value activates fixed block mode: every
+    /// `read` and `write` buffer must be an exact multiple of this size, and
+    /// [`space_records`](Tape::space_records) steps by `block_size` bytes per
+    /// record. Matches the semantics of `MTSETBLK` / `mt_dsreg` on a real
+    /// drive.
+    block_size: u32,
     /// Whether a data write has occurred since the last filemark was written.
     ///
     /// The Linux `st` driver automatically writes one filemark before executing
@@ -99,6 +106,7 @@ impl MockTape {
             file_idx: 0,
             byte_idx: 0,
             write_protected: false,
+            block_size: 0,
             dirty: false,
             file_known: true,
             block_known: true,
@@ -186,6 +194,13 @@ impl Read for MockTape {
     /// Returns `Ok(0)` without advancing when already past all written files
     /// (end of data).
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Fixed block mode: buffer must be a multiple of the block size.
+        if self.block_size > 0 && !buf.is_empty() && buf.len() % self.block_size as usize != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "EINVAL: read buffer length is not a multiple of the fixed block size",
+            ));
+        }
         if self.file_idx >= self.files.len() {
             // Past all written files — blank tape (true EOD).
             //
@@ -254,6 +269,13 @@ impl Write for MockTape {
     /// models real tape overwrite behaviour: once you start writing at a
     /// position, everything recorded past that point is gone.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Fixed block mode: buffer must be a multiple of the block size.
+        if self.block_size > 0 && !buf.is_empty() && buf.len() % self.block_size as usize != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "EINVAL: write buffer length is not a multiple of the fixed block size",
+            ));
+        }
         if self.write_protected {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -329,9 +351,22 @@ impl Tape for MockTape {
         Ok(())
     }
 
-    fn space_records(&mut self, _count: i32) -> Result<(), TapeError> {
-        // Individual records within a tape file are not separately tracked by
-        // this mock. This is a no-op; add tracking if tests require it.
+    fn space_records(&mut self, count: i32) -> Result<(), TapeError> {
+        if self.block_size == 0 {
+            // Variable-length mode: records have no uniform size, so there is
+            // no meaningful byte-level step we can take without record boundary
+            // tracking. Remain a no-op in this mode.
+            return Ok(());
+        }
+        // Fixed block mode: each record is exactly block_size bytes.
+        let step = self.block_size as usize;
+        if count >= 0 {
+            self.byte_idx = self.byte_idx.saturating_add(count as usize * step);
+        } else {
+            self.byte_idx = self.byte_idx.saturating_sub((-count) as usize * step);
+        }
+        self.block_known = true;
+        self.consecutive_zero_reads = 0;
         Ok(())
     }
 
@@ -390,11 +425,13 @@ impl Tape for MockTape {
         Ok(())
     }
 
-    /// No-op: the mock operates in variable-length mode only.
+    /// Set the fixed block (record) size in bytes, or `0` for variable-length
+    /// mode.
     ///
-    /// On a real drive this changes the physical block size; the mock ignores
-    /// it because all reads and writes are already byte-granular.
-    fn set_block_size(&mut self, _bytes: u32) -> Result<(), TapeError> {
+    /// In fixed block mode, every `read` and `write` buffer must be an exact
+    /// multiple of this size. Passing `0` restores variable-length mode.
+    fn set_block_size(&mut self, bytes: u32) -> Result<(), TapeError> {
+        self.block_size = bytes;
         Ok(())
     }
 
@@ -445,6 +482,7 @@ impl Tape for MockTape {
             drive_type: DriveType(0),
             file_number: if self.file_known { self.file_idx as i32 } else { -1 },
             block_number: if self.block_known { self.byte_idx as i32 } else { -1 },
+            block_size: self.block_size,
             flags: StatusFlags(bits),
         })
     }
@@ -1259,6 +1297,106 @@ mod tests {
         let st = tape.status().unwrap();
         assert!(st.flags.is_eof(), "EOF not set at EOD");
         assert!(st.flags.is_eod(), "EOD not set");
+    }
+
+    // ── block size / fixed-block mode ────────────────────────────────────
+
+    #[test]
+    fn default_block_size_is_zero_variable_mode() {
+        let mut tape = MockTape::new();
+        assert_eq!(tape.status().unwrap().block_size, 0);
+    }
+
+    #[test]
+    fn set_block_size_reflected_in_status() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(512).unwrap();
+        assert_eq!(tape.status().unwrap().block_size, 512);
+    }
+
+    #[test]
+    fn set_block_size_zero_restores_variable_mode() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(512).unwrap();
+        tape.set_block_size(0).unwrap();
+        assert_eq!(tape.status().unwrap().block_size, 0);
+    }
+
+    #[test]
+    fn fixed_mode_write_aligned_succeeds() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(4).unwrap();
+        tape.write_all(b"abcd").unwrap(); // 4 bytes = 1 block
+        tape.write_all(b"efghijkl").unwrap(); // 8 bytes = 2 blocks
+    }
+
+    #[test]
+    fn fixed_mode_write_unaligned_returns_einval() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(512).unwrap();
+        let result = tape.write_all(b"not-aligned"); // 11 bytes — not a multiple of 512
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fixed_mode_read_aligned_succeeds() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(4).unwrap();
+        tape.write_all(b"abcdefgh").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        let mut buf = [0u8; 8]; // 8 bytes = 2 blocks of 4
+        let n = tape.read(&mut buf).unwrap();
+        assert_eq!(n, 8);
+        assert_eq!(&buf, b"abcdefgh");
+    }
+
+    #[test]
+    fn fixed_mode_read_unaligned_returns_einval() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(512).unwrap();
+        tape.write_all(&[0u8; 512]).unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        let mut buf = [0u8; 100]; // not a multiple of 512
+        assert!(tape.read(&mut buf).is_err());
+    }
+
+    #[test]
+    fn variable_mode_write_any_size_succeeds() {
+        // Sanity check: with block_size=0, no alignment constraint applies.
+        let mut tape = MockTape::new();
+        tape.write_all(b"odd").unwrap();
+        tape.write_all(b"sizes").unwrap();
+    }
+
+    #[test]
+    fn space_records_fixed_mode_moves_by_block_size() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(4).unwrap();
+        tape.write_all(b"aabbccdd").unwrap(); // 8 bytes = 2 records of 4
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.space_records(1).unwrap(); // skip first record (4 bytes)
+        let mut buf = [0u8; 4];
+        tape.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"ccdd");
+    }
+
+    #[test]
+    fn space_records_variable_mode_is_noop() {
+        // In variable mode there is no uniform record size so space_records
+        // does nothing rather than guess.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        tape.space_records(99).unwrap(); // no-op
+        assert_eq!(read_file(&mut tape), b"data");
     }
 
     // ── erase ─────────────────────────────────────────────────────────────

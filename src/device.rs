@@ -162,6 +162,9 @@ impl Tape for TapeDevice {
             drive_type: DriveType(raw.mt_type),
             file_number: raw.mt_fileno,
             block_number: raw.mt_blkno,
+            // mt_dsreg encodes the density code in bits 24–31 and the block
+            // size in bits 0–23 (MT_ST_BLKSIZE_MASK = 0x00ff_ffff).
+            block_size: (raw.mt_dsreg & 0x00ff_ffff) as u32,
             flags: StatusFlags(raw.mt_gstat),
         })
     }

@@ -31,13 +31,16 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
   over filemarks and records, write filemarks, set block size, load/unload,
   lock/unlock door, physical erase from current position to EOT.
 - **Drive status and position** — `MTIOCGET` (flags, file number, block
-  number, drive type) and `MTIOCPOS` (absolute logical block position).
+  number, block size, drive type) and `MTIOCPOS` (absolute logical block
+  position).
 - **`Tape` trait** — a single trait implemented by both `TapeDevice` and
   `MockTape`, so all higher-level logic can be written and tested against the
   mock without any hardware present.
 - **`MockTape`** — in-memory tape simulation backed by `Vec<Vec<u8>>`, with
   correct filemark, overwrite, and write-protection semantics. Available via
   the `mock` feature flag or automatically in `#[cfg(test)]` contexts.
+  Targets variable-length block mode (the Linux `st` driver default); see
+  [block mode notes](#block-mode) below.
 - **`StatusFlags`** — typed bitmask for `mt_gstat`, with named constants and
   predicate methods (`is_bot()`, `is_write_protected()`, `is_eod()`, …)
   matching the `GMT_*` macros in `linux/mtio.h`.
@@ -236,6 +239,42 @@ Any function that accepts `&mut impl Tape` works with both `TapeDevice` and
 | `status()`           | `MTIOCGET`        | Read drive status and flags          |
 | `position()`         | `MTIOCPOS`        | Read absolute logical block position |
 | `erase()`            | `MTERASE`         | Physically erase from current position to EOT |
+
+## Block mode
+
+The Linux `st` driver supports two block modes, selected via `set_block_size`
+(`MTSETBLK`):
+
+**Variable-length mode** (`block_size = 0`, the default) — each `write(2)`
+call produces one tape record of whatever size is passed. On `read(2)`, the
+drive returns exactly one record; the read buffer must be at least as large as
+the record or the read fails with `ENOMEM`. This is the Linux `st` driver
+default and is used unless an explicit `set_block_size` call overrides it.
+
+**Fixed block mode** (`block_size > 0`) — every record on tape is exactly
+`block_size` bytes. All `read(2)` and `write(2)` buffers must be multiples of
+`block_size`; misaligned I/O fails with `EINVAL`. The block size is physically
+encoded in the tape format, so a tape written in fixed mode must be read with a
+matching block size.
+
+### TapeDevice
+
+`TapeDevice` passes `set_block_size` directly to the drive via `MTSETBLK`. The
+current block size is available as `TapeStatus::block_size` after a `status()`
+call (decoded from the `mt_dsreg` field of `struct mtget`).
+
+### MockTape
+
+`MockTape` targets variable-length mode as its primary use case, matching the
+`st` driver default. Fixed block mode is partially supported:
+
+| Behaviour | Supported |
+| --- | --- |
+| `set_block_size` stored and reported via `status()` | Yes |
+| Write alignment enforced (`EINVAL` for non-multiples) | Yes |
+| Read alignment enforced (`EINVAL` for non-multiples) | Yes |
+| `space_records` steps by `block_size` bytes | Yes |
+| Per-record read boundary enforcement (`ENOMEM` for undersized buffers in variable mode) | No — `MockTape` always does a byte-stream short read |
 
 ## Development notes
 
