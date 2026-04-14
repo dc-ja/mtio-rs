@@ -46,6 +46,22 @@ pub struct MockTape {
     byte_idx: usize,
     /// When `true`, [`Write`] and [`Tape::write_filemarks`] return an error.
     write_protected: bool,
+    /// Whether the file number is known and can be reported in [`status`].
+    ///
+    /// The Linux `st` driver sets `drv_file = -1` (unknown) after `MTSEEK`
+    /// because an absolute block seek does not convey which logical tape file
+    /// the head lands in. All other positioning operations update `drv_file`
+    /// directly, so `file_known` returns to `true` after any of them.
+    file_known: bool,
+    /// Whether the block-within-file number is known and can be reported in
+    /// [`status`].
+    ///
+    /// The driver sets `drv_block = -1` after `MTBSF` (backward space
+    /// filemarks) because the head is positioned before a filemark with no
+    /// record count available, and after `MTSEEK` for the same reason as
+    /// `file_known`. Forward operations — `MTFSF`, `MTWEOF`, rewind, and any
+    /// read or write that moves `byte_idx` — restore the known state.
+    block_known: bool,
     /// Number of consecutive zero-byte `read()` calls (filemark crossings or
     /// reads past EOD) since the last call that returned actual data or the
     /// last positioning operation.
@@ -69,6 +85,8 @@ impl MockTape {
             file_idx: 0,
             byte_idx: 0,
             write_protected: false,
+            file_known: true,
+            block_known: true,
             consecutive_zero_reads: 0,
         }
     }
@@ -142,8 +160,12 @@ impl Read for MockTape {
             // Filemark boundary: auto-advance past it, matching the Linux st
             // driver's behaviour. The next read will start at the following
             // tape file (or return Ok(0) again if that is also empty / EOD).
+            // After crossing a filemark forward, file and block numbers are
+            // known again (driver resets drv_block = 0, drv_file += 1).
             self.file_idx += 1;
             self.byte_idx = 0;
+            self.file_known = true;
+            self.block_known = true;
             self.consecutive_zero_reads = self.consecutive_zero_reads.saturating_add(1);
             if self.consecutive_zero_reads > 2 {
                 return Err(io::Error::new(
@@ -157,8 +179,11 @@ impl Read for MockTape {
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&file[self.byte_idx..self.byte_idx + n]);
         self.byte_idx += n;
-        // Any non-zero read resets the consecutive-zero counter.
+        // Any non-zero read resets the consecutive-zero counter and restores
+        // known position — we know exactly where we are within the file.
         if n > 0 {
+            self.file_known = true;
+            self.block_known = true;
             self.consecutive_zero_reads = 0;
         }
         Ok(n)
@@ -191,6 +216,8 @@ impl Write for MockTape {
         // Remove all tape files that follow (tape overwrite semantics).
         self.files.truncate(self.file_idx + 1);
         self.byte_idx += buf.len();
+        self.file_known = true;
+        self.block_known = true;
         self.consecutive_zero_reads = 0;
         Ok(buf.len())
     }
@@ -206,6 +233,8 @@ impl Tape for MockTape {
     fn rewind(&mut self) -> Result<(), TapeError> {
         self.file_idx = 0;
         self.byte_idx = 0;
+        self.file_known = true;
+        self.block_known = true;
         self.consecutive_zero_reads = 0;
         Ok(())
     }
@@ -215,15 +244,24 @@ impl Tape for MockTape {
         // drive sitting just after the last filemark before blank tape.
         self.file_idx = self.files.len();
         self.byte_idx = 0;
+        self.file_known = true;
+        self.block_known = true;
         self.consecutive_zero_reads = 0;
         Ok(())
     }
 
     fn space_filemarks(&mut self, count: i32) -> Result<(), TapeError> {
         if count >= 0 {
+            // MTFSF: file number advances, block number resets to 0 (known).
             self.file_idx = self.file_idx.saturating_add(count as usize);
+            self.file_known = true;
+            self.block_known = true;
         } else {
+            // MTBSF: file number decrements, block number becomes unknown
+            // (driver sets drv_block = -1 after backward filemark space).
             self.file_idx = self.file_idx.saturating_sub((-count) as usize);
+            self.file_known = true;
+            self.block_known = false;
         }
         self.byte_idx = 0;
         self.consecutive_zero_reads = 0;
@@ -261,8 +299,11 @@ impl Tape for MockTape {
                 }
             }
             // Advance past the filemark to the next file slot.
+            // MTWEOF restores known position: drv_file += 1, drv_block = 0.
             self.file_idx += 1;
             self.byte_idx = 0;
+            self.file_known = true;
+            self.block_known = true;
         }
         Ok(())
     }
@@ -276,6 +317,10 @@ impl Tape for MockTape {
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError> {
         self.file_idx = block as usize;
         self.byte_idx = 0;
+        // MTSEEK: both file and block number become unknown — the driver sets
+        // drv_file = drv_block = -1 after an absolute block seek.
+        self.file_known = false;
+        self.block_known = false;
         self.consecutive_zero_reads = 0;
         Ok(())
     }
@@ -332,8 +377,8 @@ impl Tape for MockTape {
         }
         Ok(TapeStatus {
             drive_type: DriveType(0),
-            file_number: self.file_idx as i32,
-            block_number: self.byte_idx as i32,
+            file_number: if self.file_known { self.file_idx as i32 } else { -1 },
+            block_number: if self.block_known { self.byte_idx as i32 } else { -1 },
             flags: StatusFlags(bits),
         })
     }
@@ -717,6 +762,111 @@ mod tests {
 
         tape.space_filemarks(1).unwrap();
         assert!(!tape.status().unwrap().flags.is_bot());
+    }
+
+    // ── Unknown position (MTBSF / MTSEEK) ────────────────────────────────
+
+    #[test]
+    fn space_filemarks_backward_sets_block_unknown() {
+        // MTBSF sets drv_block = -1 in the driver: the head is before a
+        // filemark and the record count within the prior file is not known.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+        // Positioned at EOD (file_idx 2). Space back one filemark.
+        tape.space_filemarks(-1).unwrap();
+        let st = tape.status().unwrap();
+        assert_eq!(st.file_number, 1, "file number should be known after MTBSF");
+        assert_eq!(st.block_number, -1, "block number should be -1 after MTBSF");
+    }
+
+    #[test]
+    fn space_filemarks_forward_restores_known_position() {
+        // After MTBSF the block is unknown; a subsequent MTFSF restores it.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.write_all(b"file1").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.space_filemarks(-1).unwrap(); // block unknown
+        tape.space_filemarks(1).unwrap();  // MTFSF restores
+        let st = tape.status().unwrap();
+        assert_eq!(st.block_number, 0, "block number should be 0 after MTFSF");
+    }
+
+    #[test]
+    fn seek_block_sets_both_file_and_block_unknown() {
+        // MTSEEK: the driver sets drv_file = drv_block = -1 because an
+        // absolute block address does not map to a logical file number.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        let pos = tape.position().unwrap();
+        tape.seek_block(pos).unwrap();
+        let st = tape.status().unwrap();
+        assert_eq!(st.file_number, -1, "file number should be -1 after MTSEEK");
+        assert_eq!(st.block_number, -1, "block number should be -1 after MTSEEK");
+    }
+
+    #[test]
+    fn read_after_seek_block_restores_known_position() {
+        // Reading data after an MTSEEK fixes the position tracking.
+        let mut tape = MockTape::new();
+        tape.write_all(b"hello").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        let pos = tape.position().unwrap();
+        tape.seek_block(pos).unwrap();
+        // Both unknown at this point.
+        let mut buf = [0u8; 5];
+        tape.read_exact(&mut buf).unwrap();
+        let st = tape.status().unwrap();
+        assert_ne!(st.file_number, -1, "file number should be known after read");
+        assert_ne!(st.block_number, -1, "block number should be known after read");
+    }
+
+    #[test]
+    fn write_after_seek_block_restores_known_position() {
+        // Writing after MTSEEK also restores known position.
+        let mut tape = MockTape::new();
+        tape.write_all(b"old").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        let pos = tape.position().unwrap();
+        tape.seek_block(pos).unwrap();
+        tape.write_all(b"new").unwrap();
+        let st = tape.status().unwrap();
+        assert_ne!(st.file_number, -1);
+        assert_ne!(st.block_number, -1);
+    }
+
+    #[test]
+    fn rewind_after_seek_block_restores_known_position() {
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        tape.seek_block(0).unwrap();
+        // Both unknown.
+        tape.rewind().unwrap();
+        let st = tape.status().unwrap();
+        assert_eq!(st.file_number, 0);
+        assert_eq!(st.block_number, 0);
+    }
+
+    #[test]
+    fn write_filemark_after_bsf_restores_block_known() {
+        // MTWEOF sets drv_file += 1, drv_block = 0 — restores known state.
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.write_filemarks(1).unwrap();
+        tape.space_filemarks(-1).unwrap(); // block unknown
+        tape.write_filemarks(1).unwrap();  // MTWEOF restores
+        let st = tape.status().unwrap();
+        assert_ne!(st.block_number, -1, "block number should be known after MTWEOF");
     }
 
     // ── EOD state machine ─────────────────────────────────────────────────
