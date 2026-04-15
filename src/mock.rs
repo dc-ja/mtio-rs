@@ -1299,6 +1299,83 @@ mod tests {
         assert!(st.flags.is_eod(), "EOD not set");
     }
 
+    // ── no-op operations (load, lock, unlock) ────────────────────────────
+
+    #[test]
+    fn load_succeeds() {
+        let mut tape = MockTape::new();
+        tape.load().unwrap();
+    }
+
+    #[test]
+    fn lock_succeeds() {
+        let mut tape = MockTape::new();
+        tape.lock().unwrap();
+    }
+
+    #[test]
+    fn unlock_succeeds() {
+        let mut tape = MockTape::new();
+        tape.unlock().unwrap();
+    }
+
+    // ── Write::flush ──────────────────────────────────────────────────────
+
+    #[test]
+    fn flush_is_noop_and_succeeds() {
+        use std::io::Write as _;
+        let mut tape = MockTape::new();
+        tape.write_all(b"data").unwrap();
+        tape.flush().unwrap(); // must not error or alter state
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+        assert_eq!(read_file(&mut tape), b"data");
+    }
+
+    // ── flush_if_dirty ────────────────────────────────────────────────────
+
+    #[test]
+    fn auto_filemark_on_rewind_with_empty_current_slot() {
+        // Trigger flush_if_dirty when byte_idx == 0 (no bytes written to the
+        // current slot). This happens when write_filemarks advances file_idx
+        // into a fresh slot and then rewind fires the auto-FM before any data
+        // is written there. The empty slot should be discarded, not kept.
+        let mut tape = MockTape::new();
+        tape.write_all(b"file0").unwrap();
+        tape.write_filemarks(1).unwrap(); // closes file0, advances to slot 1
+        // Now at slot 1, byte_idx == 0, dirty == false.
+        // Write something to make dirty == true, but write zero bytes so
+        // the slot stays empty at the flush boundary.
+        // The simplest trigger: write_all sets dirty; if byte_idx is still 0
+        // at rewind time, flush_if_dirty takes the is_empty branch.
+        // We achieve this by writing an empty slice explicitly via write().
+        use std::io::Write as _;
+        tape.write(&[]).unwrap(); // marks dirty without advancing byte_idx
+        tape.rewind().unwrap(); // flush_if_dirty fires: slot 1 is empty → discarded
+
+        // Only file0 should exist; no phantom empty slot.
+        assert_eq!(tape.file_count(), 1);
+        assert_eq!(tape.files()[0], b"file0");
+    }
+
+    // ── space_records backward in fixed block mode ────────────────────────
+
+    #[test]
+    fn space_records_backward_fixed_mode_moves_by_block_size() {
+        let mut tape = MockTape::new();
+        tape.set_block_size(4).unwrap();
+        tape.write_all(b"aabbccdd").unwrap(); // 8 bytes = 2 records of 4
+        tape.write_filemarks(1).unwrap();
+        tape.rewind().unwrap();
+
+        // Skip both records forward, then step back one.
+        tape.space_records(2).unwrap();
+        tape.space_records(-1).unwrap(); // back one record = 4 bytes
+        let mut buf = [0u8; 4];
+        tape.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"ccdd");
+    }
+
     // ── block size / fixed-block mode ────────────────────────────────────
 
     #[test]
