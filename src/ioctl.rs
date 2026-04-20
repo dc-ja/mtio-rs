@@ -92,6 +92,111 @@ pub const MTUNLOAD: i16 = 31;
 /// Enable or disable hardware data compression. `mt_count = 1` enables,
 /// `mt_count = 0` disables.
 pub const MTCOMPRESSION: i16 = 32;
+/// Select the active tape partition. `mt_count` is the partition number.
+/// Requires the drive to have been formatted with partitions via `MTMKPART`.
+pub const MTSETPART: i16 = 33;
+/// Format the tape with partitions. `mt_count` encodes the partition sizes;
+/// see the drive manual and `linux/mtio.h` for the encoding. Destructive.
+pub const MTMKPART: i16 = 34;
+/// Write `mt_count` filemarks immediately (without waiting for drive
+/// confirmation). Faster than `MTWEOF` but the filemark may not be committed
+/// if the system crashes before the drive finishes. Requires drive support.
+pub const MTWEOFI: i16 = 35;
+
+// ── Setmark operations ────────────────────────────────────────────────────
+//
+// Setmarks are a SCSI-2 positioning feature primarily found on DDS/DAT drives.
+// A setmark is a special magnetic pattern that groups multiple tape files into
+// a higher-level unit, allowing fast coarse positioning over many filemarks at
+// once. Rarely supported on modern drives (LTO drives typically reject them).
+
+/// Forward space over `mt_count` setmarks.
+pub const MTFSS: i16 = 25;
+/// Backward space over `mt_count` setmarks.
+pub const MTBSS: i16 = 26;
+/// Write `mt_count` setmarks at the current position.
+pub const MTWSM: i16 = 27;
+
+// ── Driver buffer / mode configuration ───────────────────────────────────
+//
+// MTSETDRVBUFFER configures st driver options and SCSI mode parameters.
+// It requires root privileges. The `mt_count` argument encodes both the
+// option group (upper 4 bits) and the value (lower bits) via the bitmasks
+// below. The general form is:
+//
+//   mt_count = MT_ST_<GROUP> | <value>
+//
+// For example, to enable two-filemark mode on close:
+//   mt_count = MT_ST_SETBOOLEANS | MT_ST_TWO_FM
+//
+// See `linux/mtio.h` and the st(4) man page for the full encoding.
+
+/// Configure st driver options and SCSI mode parameters. Requires root.
+/// `mt_count` must be composed from the `MT_ST_*` bitmask constants below.
+///
+/// There is no ioctl to read back the current settings; they are exposed
+/// as individual files under `/sys/class/scsi_tape/<device>/` (e.g.
+/// `/sys/class/scsi_tape/nst0/`). Sysfs read support is not yet implemented
+/// in this crate.
+pub const MTSETDRVBUFFER: i16 = 24;
+
+// Option group selectors (upper bits of mt_count for MTSETDRVBUFFER):
+/// Mask covering the option group bits.
+pub const MT_ST_OPTIONS: u32 = 0xf000_0000;
+/// Set all boolean flags to the values specified in the lower bits (flags not
+/// included in the mask are cleared).
+pub const MT_ST_BOOLEANS: u32 = 0x1000_0000;
+/// Set the write-buffer threshold (lower bits = threshold in kB).
+pub const MT_ST_WRITE_THRESHOLD: u32 = 0x2000_0000;
+/// Set only the boolean flags included in the lower bits (others unchanged).
+pub const MT_ST_SETBOOLEANS: u32 = 0x3000_0000;
+/// Clear only the boolean flags included in the lower bits (others unchanged).
+pub const MT_ST_CLEARBOOLEANS: u32 = 0x4000_0000;
+/// Set the default fixed block size (lower bits = size in bytes; 0 = variable).
+pub const MT_ST_DEF_BLKSIZE: u32 = 0x5000_0000;
+/// Set miscellaneous default options (density, compression, block size together).
+pub const MT_ST_DEF_OPTIONS: u32 = 0x6000_0000;
+/// Set the normal SCSI command timeout (lower bits = seconds).
+pub const MT_ST_SET_TIMEOUT: u32 = 0x7000_0000;
+/// Set the long SCSI command timeout used for rewind/erase (lower bits = seconds).
+pub const MT_ST_SET_LONG_TIMEOUT: u32 = 0x7010_0000;
+/// Configure the cleaning request threshold reported via status flags.
+pub const MT_ST_SET_CLN: u32 = 0x8000_0000;
+
+// Boolean flags (OR into MT_ST_BOOLEANS / MT_ST_SETBOOLEANS / MT_ST_CLEARBOOLEANS):
+/// Buffer write operations in the driver (write returns before data reaches tape).
+pub const MT_ST_BUFFER_WRITES: u32 = 0x1;
+/// Use asynchronous writes (driver returns immediately; errors reported later).
+pub const MT_ST_ASYNC_WRITES: u32 = 0x2;
+/// Enable read-ahead buffering.
+pub const MT_ST_READ_AHEAD: u32 = 0x4;
+/// Enable driver debug output (kernel must be compiled with `ST_DEBUGGING`).
+pub const MT_ST_DEBUGGING: u32 = 0x8;
+/// Write two filemarks when the device is closed after a write, rather than one.
+pub const MT_ST_TWO_FM: u32 = 0x10;
+/// Use the fast seek-to-EOD path (`MTEOM` ioctl) rather than spacing filemarks.
+pub const MT_ST_FAST_MTEOM: u32 = 0x20;
+/// Automatically lock the drive door when the device is opened.
+pub const MT_ST_AUTO_LOCK: u32 = 0x40;
+/// Interpret `O_WRONLY` opens as a request to write from the current position
+/// (default writes mode for the device).
+pub const MT_ST_DEF_WRITES: u32 = 0x80;
+/// Drive can backspace over records (enables `MTBSR`).
+pub const MT_ST_CAN_BSR: u32 = 0x100;
+/// Drive does not report block size limits (skip `READ BLOCK LIMITS` command).
+pub const MT_ST_NO_BLKLIMS: u32 = 0x200;
+/// Drive supports tape partitions (required before using `MTSETPART`/`MTMKPART`).
+pub const MT_ST_CAN_PARTITIONS: u32 = 0x400;
+/// Use SCSI-2 logical block addressing for seek/tell operations.
+pub const MT_ST_SCSI2LOGICAL: u32 = 0x800;
+/// Use System V semantics: rewind on the last `close` of a non-rewinding node.
+pub const MT_ST_SYSV: u32 = 0x1000;
+/// Return immediately (rather than waiting) when the drive is not ready.
+pub const MT_ST_NOWAIT: u32 = 0x2000;
+/// Suppress the Incorrect Length Indicator (SILI) for variable-block reads.
+pub const MT_ST_SILI: u32 = 0x4000;
+/// Do not wait for the drive to report EOF; return immediately at filemark.
+pub const MT_ST_NOWAIT_EOF: u32 = 0x8000;
 
 /// Returns `true` if `op` is one of the `MT*` constants defined in this module.
 pub fn is_known_op(op: i16) -> bool {
@@ -99,7 +204,8 @@ pub fn is_known_op(op: i16) -> bool {
         op,
         MTFSF | MTBSF | MTFSR | MTBSR | MTWEOF | MTREW | MTOFFL | MTNOP | MTRETEN | MTBSFM
             | MTFSFM | MTEOM | MTERASE | MTSETBLK | MTSETDENSITY | MTSEEK | MTLOCK | MTUNLOCK
-            | MTLOAD | MTUNLOAD | MTCOMPRESSION
+            | MTLOAD | MTUNLOAD | MTCOMPRESSION | MTSETPART | MTMKPART | MTWEOFI | MTFSS | MTBSS
+            | MTWSM | MTSETDRVBUFFER
     )
 }
 
