@@ -92,6 +92,9 @@ impl TapeDevice {
     /// drive.raw_op(MTRETEN, 1).unwrap(); // re-tension the tape
     /// ```
     pub fn raw_op(&self, op: i16, count: i32) -> Result<(), TapeError> {
+        if !ioctl::is_known_op(op) {
+            return Err(TapeError::UnknownOperation(op));
+        }
         self.do_op(op, count)
     }
 }

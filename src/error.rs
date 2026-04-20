@@ -71,4 +71,11 @@ pub enum TapeError {
     /// limit is never reached in practice.
     #[error("block number {0} exceeds the 32-bit limit of the MTSEEK operation")]
     BlockNumberTooLarge(u64),
+
+    /// An unrecognised operation code was passed to
+    /// [`TapeDevice::raw_op`](crate::TapeDevice::raw_op).
+    ///
+    /// Use one of the `MT*` constants exported from this crate.
+    #[error("unknown tape operation code {0}")]
+    UnknownOperation(i16),
 }

@@ -95,6 +95,16 @@ pub const MTUNLOAD: i16 = 31;
 /// `mt_count = 0` disables.
 pub const MTCOMPRESSION: i16 = 32;
 
+/// Returns `true` if `op` is one of the `MT*` constants defined in this module.
+pub fn is_known_op(op: i16) -> bool {
+    matches!(
+        op,
+        MTFSF | MTBSF | MTFSR | MTBSR | MTWEOF | MTREW | MTOFFL | MTNOP | MTRETEN | MTBSFM
+            | MTFSFM | MTEOM | MTERASE | MTSETBLK | MTSETDENSITY | MTSEEK | MTTELL | MTLOCK
+            | MTUNLOCK | MTLOAD | MTUNLOAD | MTCOMPRESSION
+    )
+}
+
 // ── C structs ─────────────────────────────────────────────────────────────
 
 /// Argument passed to the `MTIOCTOP` ioctl.
