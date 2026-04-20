@@ -72,11 +72,7 @@ impl TapeDevice {
 
     /// Issue a tape operation via `MTIOCTOP`.
     fn do_op(&self, mt_op: i16, mt_count: i32) -> Result<(), TapeError> {
-        let op = MtOp {
-            mt_op,
-            _pad: 0,
-            mt_count,
-        };
+        let op = MtOp::new(mt_op, mt_count);
         unsafe { ioctl::mtioctop_raw(self.file.as_raw_fd(), &op) }?;
         Ok(())
     }

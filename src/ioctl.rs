@@ -115,13 +115,18 @@ pub const MTCOMPRESSION: i16 = 32;
 pub struct MtOp {
     /// The operation to perform (one of the `MT*` constants in this module).
     pub mt_op: i16,
-    /// Explicit padding to match the C struct layout. Must be zero.
-    pub _pad: i16,
+    _pad: i16,
     /// Operation parameter — meaning depends on `mt_op`.
     /// For spacing operations: number of filemarks/records to traverse.
     /// For `MTSETBLK`: block size in bytes.
     /// For `MTSEEK`: target logical block number.
     pub mt_count: i32,
+}
+
+impl MtOp {
+    pub fn new(mt_op: i16, mt_count: i32) -> Self {
+        Self { mt_op, _pad: 0, mt_count }
+    }
 }
 
 /// Drive status returned by the `MTIOCGET` ioctl.
