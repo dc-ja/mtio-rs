@@ -35,17 +35,17 @@
 //!
 //! ## Non-rewinding device nodes
 //!
-//! Linux exposes each tape drive as two device nodes:
+//! Linux exposes each tape drive as a group of device nodes, most notably:
 //!
 //! - `/dev/st0`, `/dev/st1`, … — *rewinding*: the drive rewinds to BOT
 //!   when the file descriptor is closed.
 //! - `/dev/nst0`, `/dev/nst1`, … — *non-rewinding*: the drive stays at its
 //!   current position when the file descriptor is closed.
 //!
-//! **Always use the non-rewinding node (`/dev/nst*`).** Using the rewinding
-//! node in a multi-file session causes the drive to rewind on the first
-//! `close(2)`, silently destroying everything written after the first tape
-//! file.
+//! Prefer using the non-rewinding node in multi-file sessions. Using the 
+//! rewinding node in a multi-file session causes the drive to rewind on the 
+//! first `close(2)`, silently destroying everything written after the first 
+//! tape file.
 //!
 //! # Structure
 //!
@@ -57,8 +57,8 @@
 //!
 //! # Non-rewinding devices
 //!
-//! Always open `/dev/nst*` (the non-rewinding variant). `TapeDevice` does not
-//! implicitly rewind on open or drop; positioning is entirely caller-controlled.
+//! `TapeDevice` does not implicitly rewind on open or drop; positioning is
+//! entirely caller-controlled.
 
 pub mod error;
 pub mod status;
@@ -85,10 +85,6 @@ use std::io::{Read, Write};
 
 /// Operations common to all tape devices.
 ///
-/// This trait is the primary abstraction point. All backup logic in
-/// `tape-backup-lib` accepts `&mut impl Tape`, making it testable against
-/// `MockTape` without hardware.
-///
 /// ## Reading across filemarks
 ///
 /// `Read::read` returns `Ok(0)` at a filemark boundary — identical to EOF on
@@ -101,15 +97,6 @@ use std::io::{Read, Write};
 ///              read → 0            read → 0
 ///          space_filemarks(1)   (logical end of archive)
 /// ```
-///
-/// **Driver note**: whether `read` returning `Ok(0)` leaves the tape *at* or
-/// *past* the filemark is driver- and firmware-dependent. Some implementations
-/// advance the logical position automatically; others do not. For robust
-/// positioning across multiple tape files, prefer rewinding and using
-/// [`space_filemarks`](Tape::space_filemarks) from a known clean position
-/// rather than calling `space_filemarks(1)` immediately after a read that
-/// returned `Ok(0)`. `MockTape` uses the "not auto-advanced" model, requiring
-/// an explicit `space_filemarks(1)` after each filemark boundary.
 ///
 /// ## Writing across filemarks
 ///
@@ -168,12 +155,7 @@ pub trait Tape: Read + Write {
     ///
     /// This uses the SCSI `MTSEEK` operation, which accepts a 32-bit block
     /// count. Block numbers larger than [`i32::MAX`] (≈ 2.1 billion) return
-    /// [`TapeError::BlockNumberTooLarge`]. For the modest file counts used by
-    /// this application (fewer than ten tape files per tape) this limit is
-    /// never approached.
-    ///
-    /// Use [`position`](Tape::position) to capture a block number before
-    /// seeking away, then pass it back here to return.
+    /// [`TapeError::BlockNumberTooLarge`].
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError>;
 
     /// Set the fixed block (record) size in bytes.

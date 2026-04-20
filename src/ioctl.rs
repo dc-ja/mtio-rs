@@ -14,9 +14,8 @@
 //! | `MTIOCGET` | `0x80306d02` | READ      | 48       | `m`  | 2  | Read drive status   |
 //! | `MTIOCPOS` | `0x80086d03` | READ      | 8        | `m`  | 3  | Read block position |
 //!
-//! **Direction** is from the kernel's perspective: WRITE means the kernel
-//! reads a struct that userspace provides; READ means the kernel writes a
-//! struct into userspace memory.
+//! WRITE means the kernel reads a struct that userspace provides; READ means
+//! the kernel writes a struct into userspace memory.
 //!
 //! # ioctl number derivation
 //!
@@ -112,11 +111,6 @@ pub const MTCOMPRESSION: i16 = 32;
 ///     int   mt_count; /* repeat count or parameter */
 /// };
 /// ```
-///
-/// Layout on 64-bit Linux: `short` (2 B) + 2 B implicit C padding + `int`
-/// (4 B) = **8 bytes total**. The padding is required because `int` must be
-/// 4-byte aligned; `#[repr(C)]` does not insert it automatically, so we
-/// declare it explicitly as `_pad`.
 #[repr(C)]
 pub struct MtOp {
     /// The operation to perform (one of the `MT*` constants in this module).
@@ -145,10 +139,6 @@ pub struct MtOp {
 ///     int  mt_blkno;   /* current block number within the tape file */
 /// };
 /// ```
-///
-/// Layout on 64-bit Linux: 5 × `long` (5 × 8 = 40 B) + 2 × `int` (2 × 4 =
-/// 8 B) = **48 bytes total**. No padding is needed because all fields are
-/// naturally aligned.
 ///
 /// The most useful field for callers is `mt_gstat`, whose bits are decoded by
 /// [`StatusFlags`](crate::status::StatusFlags).
@@ -183,8 +173,6 @@ pub struct MtGet {
 ///     long mt_blkno; /* absolute logical block number */
 /// };
 /// ```
-///
-/// Layout on 64-bit Linux: `long` (8 B) = **8 bytes total**.
 ///
 /// Unlike `mt_blkno` in `MtGet` (which resets per tape file), `mt_blkno`
 /// here is an *absolute* logical block number that increases monotonically

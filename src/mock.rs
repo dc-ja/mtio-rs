@@ -132,6 +132,8 @@ impl MockTape {
         self.files.len()
     }
 
+    /// Guard against write operations on write-protected tape. Returns a
+    /// `TapeError` if write protection is active.
     fn check_write_protected(&self) -> Result<(), TapeError> {
         if self.write_protected {
             Err(TapeError::WriteProtected)

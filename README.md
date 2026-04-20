@@ -3,28 +3,6 @@
 Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
 `/dev/nst*` tape devices, with an in-memory mock for unit testing.
 
-> [!CAUTION]
-> Not all AI output has been verified yet.
-
-> [!CAUTION]
-> Not all functionality has been tested on real hardware yet, partially due 
-> to lack of support by my test drive.
-
-> [!CAUTION]
-> `MockTape` can not yet be assumed to be a true representation of a tape 
-> drive's behavior. Its implementation is currently based on what the AI has
-> generated, including the tests, and I have yet to verify all of the 
-> assumptions made in either.
->
-> Most notably, during hardware testing, some of the actual behavior of the
-> Linux `st` driver has been different from that of `MockTape`. The latter
->  has been updated to reflect that, but it should illustrate just how 
-> (un-)reliable it currently may be.
-
-> [!NOTE]
-> AI was used in the creation of this crate.
-> [See below for details](#ai-assistance).
-
 ## Features
 
 - **Full `MTIOCTOP` coverage** — rewind, seek to EOD, forward/backward space
@@ -48,21 +26,6 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
   on `target_os = "linux"`. The `Tape` trait and `MockTape` compile on all
   platforms, so the rest of the workspace can be developed on macOS or
   Windows.
-
-## Background: tape vs. disk
-
-Tape is a _sequential-access_ medium. You cannot seek to an arbitrary byte
-position; you move forward or backward by whole _records_ (blocks) or
-_filemarks_. Writing at any position discards everything recorded after it.
-
-Data is grouped into _tape files_ separated by filemarks. A `read(2)` at a
-filemark boundary returns 0 bytes (like a regular EOF); the caller must call
-`space_filemarks(1)` to step past it. Two consecutive filemarks signal the
-logical end of an archive (the POSIX/GNU `tar` convention).
-
-Always open the **non-rewinding** device node (`/dev/nst0`, `/dev/nst1`, …).
-The rewinding node (`/dev/st0`) rewinds to BOT on `close(2)`, which silently
-destroys data in a multi-file session.
 
 ## Installation
 
@@ -163,9 +126,15 @@ fn main() -> Result<(), mtio::TapeError> {
 
 Two levels of erasure are available:
 
-**Logical truncation** — seek to the desired position and write a double
-filemark. Data past that point is unreachable by normal means but is _not_
-magnetically destroyed. Fast, minimal wear.
+**Truncation** — every write (data record or filemark) causes the drive
+firmware to update its End-of-Data (EOD) marker to immediately follow the
+last written item. Everything beyond that point becomes inaccessible: normal
+I/O stops at EOD regardless of what is magnetically recorded past it. Writing
+a filemark at a chosen position is therefore the conventional way to mark
+the end of an archive at that position; the firmware EOD update is what makes
+prior data unreachable, not the filemark count itself. The magnetically
+recorded data past the new EOD is not destroyed — it simply cannot be reached
+by normal means. Fast, minimal wear.
 
 **Physical erase** — `erase()` issues `MTERASE`, causing the drive's erase
 head to traverse the full remaining tape. All data from the current position
@@ -179,8 +148,10 @@ use std::path::Path;
 fn main() -> Result<(), mtio::TapeError> {
     let mut drive = TapeDevice::open(Path::new("/dev/nst0"))?;
 
-    // Logical truncation: remove the last file by seeking to EOD,
-    // spacing back one filemark, and writing a double filemark.
+    // Remove the last file: seek to EOD, space back one filemark,
+    // and write a double filemark (the POSIX tar EOA convention).
+    // The drive updates its EOD marker after the write, making the
+    // removed file unreachable without physically destroying it.
     drive.seek_to_eod()?;
     drive.space_filemarks(-1)?;
     drive.write_filemarks(2)?;
@@ -195,6 +166,13 @@ fn main() -> Result<(), mtio::TapeError> {
 ```
 
 ### Testing with MockTape
+> [!IMPORTANT]
+> `MockTape` does not emulate each and every aspect of a tape drive. Apart
+> from the obvious (instant operation rather than delay due to tape travel),
+> there are differences like the assumption that a tape is always present,
+> a focus on variable [block mode](#block-mode) with only 
+> [partial support](#mocktape) for fixed block mode, and no auto-rewind after
+> writing operations.
 
 ```rust
 use mtio::{MockTape, Tape};
@@ -268,12 +246,12 @@ call (decoded from the `mt_dsreg` field of `struct mtget`).
 `MockTape` targets variable-length mode as its primary use case, matching the
 `st` driver default. Fixed block mode is partially supported:
 
-| Behaviour | Supported |
-| --- | --- |
-| `set_block_size` stored and reported via `status()` | Yes |
-| Write alignment enforced (`EINVAL` for non-multiples) | Yes |
-| Read alignment enforced (`EINVAL` for non-multiples) | Yes |
-| `space_records` steps by `block_size` bytes | Yes |
+| Behaviour                                                                               | Supported                                            |
+| -----------------------------------------------------------------------------------------| ------------------------------------------------------|
+| `set_block_size` stored and reported via `status()`                                     | Yes                                                  |
+| Write alignment enforced (`EINVAL` for non-multiples)                                   | Yes                                                  |
+| Read alignment enforced (`EINVAL` for non-multiples)                                    | Yes                                                  |
+| `space_records` steps by `block_size` bytes                                             | Yes                                                  |
 | Per-record read boundary enforcement (`ENOMEM` for undersized buffers in variable mode) | No — `MockTape` always does a byte-stream short read |
 
 ## Development notes

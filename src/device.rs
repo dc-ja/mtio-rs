@@ -2,14 +2,16 @@
 //!
 //! # Device nodes
 //!
-//! Linux exposes each physical tape drive as a pair of character devices:
+//! Linux exposes each physical tape drive as a group of character devices,
+//! most notably:
 //!
 //! - `/dev/st0`, `/dev/st1`, … — *rewinding*: the kernel rewinds the tape
 //!   to BOT when the file descriptor is closed.
 //! - `/dev/nst0`, `/dev/nst1`, … — *non-rewinding*: the tape stays at its
 //!   current position when the file descriptor is closed.
 //!
-//! **Always open the non-rewinding node (`/dev/nst*`).**
+//! In multi-file use-cases, non-rewinding devices should be preferred over 
+//! their rewinding counterparts.
 //! Writing multiple tape files in one session requires opening the device,
 //! writing file 0, writing a filemark, writing file 1, writing a filemark,
 //! etc. — all without closing in between. If the rewinding node is used, the
@@ -21,9 +23,12 @@
 //! Data is transferred by ordinary `read(2)` and `write(2)` system calls on
 //! the device file descriptor. Each `write` call produces exactly one tape
 //! *record*; each `read` call reads at most one record. When a `read` reaches
-//! a filemark, the kernel returns 0 bytes. The next `read` would still return
-//! 0; the caller must issue [`Tape::space_filemarks(1)`](crate::Tape) to
-//! step past the filemark.
+//! a filemark, the kernel returns 0 bytes and advances the internal eof state
+//! from `ST_FM_HIT` to `ST_FM`. The **next** `read` issues a real SCSI READ
+//! from the drive, which is now positioned at the start of the following tape
+//! file, so data flows normally — no explicit
+//! [`space_filemarks`](crate::Tape::space_filemarks) call is required between
+//! consecutive tape files.
 //!
 //! # ioctl operations
 //!
@@ -45,9 +50,13 @@ use crate::Tape;
 
 /// A handle to a Linux tape device (typically `/dev/nst0`, `/dev/nst1`, …).
 ///
-/// Always use the **non-rewinding** device node (`/dev/nst*`). The rewinding
-/// node (`/dev/st*`) rewinds on close, which will silently destroy data
-/// written in a multi-file session.
+/// In most cases, specifically multi-file sessions, `/dev/nst*` should be
+/// preferred over `/dev/st*` since the latter automatically rewinds the tape
+/// whenever the file descriptor is closed. Writing multiple files would 
+/// cause each new file to be written at the beginning of the tape, thus
+/// overwriting all previous data on the tape; you would end up with only
+/// the most recently written file on tape (and the wear on both tape and
+/// drive caused by repeated writing and rewinding).
 ///
 /// `TapeDevice` does not rewind on [`Drop`]; all positioning is explicit.
 pub struct TapeDevice {

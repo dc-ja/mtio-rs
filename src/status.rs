@@ -9,10 +9,12 @@ pub struct TapeStatus {
     /// [`DriveType`] for any type-based branching.
     pub drive_type: DriveType,
     /// Current tape file number (0-based). Increments by one each time the
-    /// tape crosses a filemark. Resets to 0 on rewind.
+    /// tape crosses a filemark. Resets to 0 on rewind. If the file-number
+    /// is unknown, the value is -1.
     pub file_number: i32,
     /// Current record number within the current tape file. Resets to 0 at
-    /// each filemark boundary.
+    /// each filemark boundary. If the record number is unknown, the value
+    /// is -1.
     pub block_number: i32,
     /// Current block (record) size in bytes, from the `mt_dsreg` field of
     /// `struct mtget` (bits 0–23, `MT_ST_BLKSIZE_MASK`).
@@ -116,8 +118,6 @@ impl StatusFlags {
 
     /// Returns `true` if the tape is at the logical end of recorded data
     /// (EOD): no data has been written past this point.
-    ///
-    /// Appending new data is only valid at or before the EOD position.
     pub fn is_eod(&self) -> bool {
         self.has(Self::EOD)
     }
