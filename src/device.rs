@@ -76,6 +76,24 @@ impl TapeDevice {
         unsafe { ioctl::mtioctop_raw(self.file.as_raw_fd(), &op) }?;
         Ok(())
     }
+
+    /// Issue a raw `MTIOCTOP` ioctl with the given operation code and count.
+    ///
+    /// This is an escape hatch for tape operations not covered by the [`Tape`]
+    /// trait. Use the `MT*` constants re-exported from the crate root for `op`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mtio::{TapeDevice, MTRETEN};
+    /// use std::path::Path;
+    ///
+    /// let mut drive = TapeDevice::open(Path::new("/dev/nst0")).unwrap();
+    /// drive.raw_op(MTRETEN, 1).unwrap(); // re-tension the tape
+    /// ```
+    pub fn raw_op(&self, op: i16, count: i32) -> Result<(), TapeError> {
+        self.do_op(op, count)
+    }
 }
 
 impl Read for TapeDevice {

@@ -39,10 +39,6 @@
 //! `linux/mtio.h`. On a 64-bit Linux target, `long` is 8 bytes and `int` is
 //! 4 bytes.
 
-// The MT* constants expose the full mtio.h surface as public API.
-// Not all are used within this crate, but callers may need any of them.
-#![allow(dead_code)]
-
 use nix::{ioctl_read, ioctl_write_ptr};
 
 // ── Tape operation codes (mt_op field of MtOp) ────────────────────────────

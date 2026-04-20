@@ -67,6 +67,13 @@ pub mod status;
 mod ioctl;
 
 #[cfg(target_os = "linux")]
+pub use ioctl::{
+    MTBSF, MTBSFM, MTBSR, MTCOMPRESSION, MTEOM, MTERASE, MTFSF, MTFSFM, MTFSR, MTLOAD, MTLOCK,
+    MTNOP, MTOFFL, MTRETEN, MTREW, MTSEEK, MTSETBLK, MTSETDENSITY, MTTELL, MTUNLOAD, MTUNLOCK,
+    MTWEOF,
+};
+
+#[cfg(target_os = "linux")]
 pub mod device;
 
 #[cfg(any(test, feature = "mock"))]
