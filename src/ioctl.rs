@@ -81,8 +81,6 @@ pub const MTSETBLK: i16 = 20;
 pub const MTSETDENSITY: i16 = 21;
 /// Seek to the logical block number given in `mt_count`.
 pub const MTSEEK: i16 = 22;
-/// Report the current logical block number (result via `MTIOCPOS`, not here).
-pub const MTTELL: i16 = 23;
 /// Lock the drive door to prevent accidental ejection.
 pub const MTLOCK: i16 = 28;
 /// Unlock the drive door.
@@ -100,8 +98,8 @@ pub fn is_known_op(op: i16) -> bool {
     matches!(
         op,
         MTFSF | MTBSF | MTFSR | MTBSR | MTWEOF | MTREW | MTOFFL | MTNOP | MTRETEN | MTBSFM
-            | MTFSFM | MTEOM | MTERASE | MTSETBLK | MTSETDENSITY | MTSEEK | MTTELL | MTLOCK
-            | MTUNLOCK | MTLOAD | MTUNLOAD | MTCOMPRESSION
+            | MTFSFM | MTEOM | MTERASE | MTSETBLK | MTSETDENSITY | MTSEEK | MTLOCK | MTUNLOCK
+            | MTLOAD | MTUNLOAD | MTCOMPRESSION
     )
 }
 
