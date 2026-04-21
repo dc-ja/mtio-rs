@@ -3,7 +3,7 @@
 /// Obtained via [`Tape::status`](crate::Tape::status). The most useful field
 /// for callers is [`flags`](TapeStatus::flags), which reports whether the tape
 /// is write-protected, online, at BOT, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TapeStatus {
     /// Manufacturer-specific drive type code from `mt_type`. Opaque; use
     /// [`DriveType`] for any type-based branching.
@@ -32,7 +32,7 @@ pub struct TapeStatus {
 ///
 /// The numeric value is manufacturer-specific. Stored as-is for logging and
 /// diagnostics; no semantic meaning is ascribed to specific values here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct DriveType(pub i64);
 
 /// Bitmask of generic, device-independent status flags from the `mt_gstat`
@@ -56,7 +56,7 @@ pub struct DriveType(pub i64);
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct StatusFlags(pub i64);
 
 impl StatusFlags {

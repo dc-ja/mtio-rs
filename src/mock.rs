@@ -37,7 +37,7 @@ use crate::Tape;
 
 /// In-memory tape simulation. See the [module documentation](self) for the
 /// model and behavioural contract.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MockTape {
     /// The tape contents, one entry per tape file (data between filemarks).
     files: Vec<Vec<u8>>,
