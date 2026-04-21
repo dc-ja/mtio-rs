@@ -460,33 +460,33 @@ impl Tape for MockTape {
     }
 
     fn status(&mut self) -> Result<TapeStatus, TapeError> {
-        let mut bits: i64 = 0;
+        let mut flags = StatusFlags::empty();
         // The mock always has a "tape" loaded and the drive ready.
-        bits |= StatusFlags::ONLINE;
+        flags |= StatusFlags::ONLINE;
         // BOT: both file number and block number are zero (driver source:
         // `if (mt_fileno == 0 && mt_blkno == 0) gstat |= GMT_BOT`).
         if self.file_idx == 0 && self.byte_idx == 0 {
-            bits |= StatusFlags::BOT;
+            flags |= StatusFlags::BOT;
         }
         // EOF: block number is zero but file number is non-zero — i.e. the
         // head is positioned at the start of any file after the first
         // (driver source: `else if (mt_blkno == 0) gstat |= GMT_EOF`).
         // Mutually exclusive with BOT because the driver uses else-if.
         if self.file_idx > 0 && self.byte_idx == 0 {
-            bits |= StatusFlags::EOF;
+            flags |= StatusFlags::EOF;
         }
         if self.file_idx >= self.files.len() {
-            bits |= StatusFlags::EOD;
+            flags |= StatusFlags::EOD;
         }
         if self.write_protected {
-            bits |= StatusFlags::WR_PROT;
+            flags |= StatusFlags::WR_PROT;
         }
         Ok(TapeStatus {
             drive_type: DriveType(0),
             file_number: if self.file_known { self.file_idx as i32 } else { -1 },
             block_number: if self.block_known { self.byte_idx as i32 } else { -1 },
             block_size: self.block_size,
-            flags: StatusFlags(bits),
+            flags,
         })
     }
 
