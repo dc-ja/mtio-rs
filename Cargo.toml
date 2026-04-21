@@ -9,6 +9,13 @@ keywords = ["tape", "scsi", "ioctl", "linux", "backup"]
 categories = ["os::unix-apis", "hardware-support"]
 rust-version = "1.74"
 
+[package.metadata.docs.rs]
+# Build on Linux so that TapeDevice, MT* constants, and all linux-gated items
+# are included in the rendered documentation.
+targets = ["x86_64-unknown-linux-gnu"]
+# Show MockTape in the public docs as well.
+features = ["mock"]
+
 [features]
 # Expose MockTape for use in other crates' test suites
 mock = []
