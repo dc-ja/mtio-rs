@@ -31,11 +31,11 @@ Safe Rust bindings for the Linux SCSI tape driver — `ioctl(2)` interface to
 
 ```toml
 [dependencies]
-mtio = { git = "https://github.com/dc-ja/mtio-rs" }
+mtio = "0.1"
 
 # To use MockTape in tests of a downstream crate:
 [dev-dependencies]
-mtio = { git = "https://github.com/dc-ja/mtio-rs", features = ["mock"] }
+mtio = { version = "0.1", features = ["mock"] }
 ```
 
 Requires Rust 1.74+ and Linux.
