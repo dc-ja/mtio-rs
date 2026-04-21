@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Safe Rust bindings for the Linux SCSI tape driver (`/dev/st*`, `/dev/nst*`).
 //!
 //! # Background: how tape differs from disk
@@ -60,7 +61,9 @@
 //! `TapeDevice` does not implicitly rewind on open or drop; positioning is
 //! entirely caller-controlled.
 
+/// Error type returned by all tape operations.
 pub mod error;
+/// Drive status and flag types returned by [`Tape::status`].
 pub mod status;
 
 #[cfg(target_os = "linux")]
