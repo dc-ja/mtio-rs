@@ -59,6 +59,7 @@ use crate::Tape;
 /// drive caused by repeated writing and rewinding).
 ///
 /// `TapeDevice` does not rewind on [`Drop`]; all positioning is explicit.
+#[derive(Debug)]
 pub struct TapeDevice {
     file: File,
 }
