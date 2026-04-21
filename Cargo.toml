@@ -5,6 +5,8 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Linux magnetic tape device I/O — safe bindings for the SCSI tape driver ioctl interface"
 repository = "https://github.com/dc-ja/mtio-rs"
+keywords = ["tape", "scsi", "ioctl", "linux", "backup"]
+categories = ["os::unix-apis", "hardware-support"]
 rust-version = "1.74"
 
 [features]
