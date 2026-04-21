@@ -95,6 +95,23 @@ pub mod mock;
 pub use error::TapeError;
 pub use status::{DriveType, StatusFlags, TapeStatus};
 
+/// Selects between a short and a long physical erase for [`Tape::erase`].
+///
+/// A **short erase** writes an EOD marker at the current position; it is fast
+/// and low-wear but leaves prior data magnetically intact (though unreachable
+/// by normal means).
+///
+/// A **long erase** causes the drive's erase head to traverse the full
+/// remaining tape, permanently destroying all data magnetically. It takes
+/// minutes to hours depending on tape length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EraseMode {
+    /// Write an EOD marker at the current position (fast, low-wear).
+    Short,
+    /// Traverse and magnetically erase the full remaining tape (slow, high-wear).
+    Long,
+}
+
 #[cfg(target_os = "linux")]
 pub use device::TapeDevice;
 
@@ -298,12 +315,7 @@ pub trait Tape: Read + Write {
     /// This is a **destructive, high-wear operation**. All data from the
     /// current position onwards is permanently destroyed.
     ///
-    /// If `long_erase` is `true`, the erase head traverses the full remaining
-    /// tape (a long erase), which takes minutes to hours depending on tape
-    /// length but provides the most thorough erasure. If `false`, a short erase
-    /// is performed, which writes only an EOD marker at the current position;
-    /// it is fast but leaves prior data magnetically intact (though unreachable
-    /// by normal means).
+    /// See [`EraseMode`] for the distinction between short and long erases.
     ///
     /// This is **not** a cryptographic erase; it is a magnetic erase that
     /// renders data unreadable by normal means. For security-sensitive data,
@@ -313,12 +325,13 @@ pub trait Tape: Read + Write {
     /// [`rewind`](Tape::rewind) and [`space_filemarks`](Tape::space_filemarks)
     /// before calling this method.
     ///
-    /// Equivalent to `mt erase` (long) or `mt erase 0` (short).
+    /// Equivalent to `mt erase` ([`EraseMode::Long`]) or `mt erase 0`
+    /// ([`EraseMode::Short`]).
     ///
     /// # Errors
     ///
     /// Returns [`TapeError::WriteProtected`] if the cartridge is
     /// write-protected. Returns an error if the drive is offline or a hardware
     /// error occurs.
-    fn erase(&mut self, long_erase: bool) -> Result<(), TapeError>;
+    fn erase(&mut self, mode: EraseMode) -> Result<(), TapeError>;
 }

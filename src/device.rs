@@ -46,7 +46,7 @@ use std::path::Path;
 use crate::error::TapeError;
 use crate::ioctl::{self, MtGet, MtOp, MtPos};
 use crate::status::{DriveType, StatusFlags, TapeStatus};
-use crate::Tape;
+use crate::{EraseMode, Tape};
 
 /// A handle to a Linux tape device (typically `/dev/nst0`, `/dev/nst1`, …).
 ///
@@ -215,7 +215,7 @@ impl Tape for TapeDevice {
         Ok(raw.mt_blkno as u64)
     }
 
-    fn erase(&mut self, long_erase: bool) -> Result<(), TapeError> {
-        self.do_op(ioctl::MTERASE, long_erase as i32)
+    fn erase(&mut self, mode: EraseMode) -> Result<(), TapeError> {
+        self.do_op(ioctl::MTERASE, (mode == EraseMode::Long) as i32)
     }
 }

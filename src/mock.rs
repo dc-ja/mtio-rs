@@ -33,7 +33,7 @@ use std::io::{self, Read, Write};
 
 use crate::error::TapeError;
 use crate::status::{DriveType, StatusFlags, TapeStatus};
-use crate::Tape;
+use crate::{EraseMode, Tape};
 
 /// In-memory tape simulation. See the [module documentation](self) for the
 /// model and behavioural contract.
@@ -503,7 +503,7 @@ impl Tape for MockTape {
     /// Truncates the current tape file at the current byte offset and removes
     /// all subsequent files, mirroring the effect of a physical erase. Returns
     /// [`TapeError::WriteProtected`] if the tape is write-protected.
-    fn erase(&mut self, _long_erase: bool) -> Result<(), TapeError> {
+    fn erase(&mut self, _mode: EraseMode) -> Result<(), TapeError> {
         self.check_write_protected()?;
         if self.file_idx < self.files.len() {
             self.files[self.file_idx].truncate(self.byte_idx);
@@ -1490,7 +1490,7 @@ mod tests {
         tape.write_filemarks(1).unwrap();
 
         tape.rewind().unwrap();
-        tape.erase(true).unwrap();
+        tape.erase(EraseMode::Long).unwrap();
 
         assert_eq!(tape.file_count(), 0);
     }
@@ -1508,7 +1508,7 @@ mod tests {
         // Position at the start of file 1 and erase from there.
         tape.rewind().unwrap();
         tape.space_filemarks(1).unwrap();
-        tape.erase(true).unwrap();
+        tape.erase(EraseMode::Long).unwrap();
 
         assert_eq!(tape.file_count(), 1);
         assert_eq!(tape.files()[0], b"keep");
@@ -1524,7 +1524,7 @@ mod tests {
         tape.rewind().unwrap();
         let mut tmp = [0u8; 3];
         tape.read_exact(&mut tmp).unwrap();
-        tape.erase(true).unwrap();
+        tape.erase(EraseMode::Long).unwrap();
 
         // The first 3 bytes should be preserved; the rest gone.
         assert_eq!(tape.file_count(), 1);
@@ -1539,7 +1539,7 @@ mod tests {
         tape.seek_to_eod().unwrap();
 
         let count_before = tape.file_count();
-        tape.erase(true).unwrap();
+        tape.erase(EraseMode::Long).unwrap();
         assert_eq!(tape.file_count(), count_before);
     }
 
@@ -1550,13 +1550,13 @@ mod tests {
         tape.write_filemarks(1).unwrap();
         tape.rewind().unwrap();
 
-        tape.erase(true).unwrap();
+        tape.erase(EraseMode::Long).unwrap();
         assert!(tape.status().unwrap().flags.is_eod());
     }
 
     #[test]
     fn erase_on_write_protected_tape_errors() {
         let mut tape = MockTape::new().write_protected();
-        assert!(tape.erase(true).is_err());
+        assert!(tape.erase(EraseMode::Long).is_err());
     }
 }
