@@ -23,7 +23,7 @@ mock = []
 hardware = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.29", features = ["ioctl"] }
+nix = { version = "0.31", features = ["ioctl"] }
 
 [dependencies]
 bitflags = "2.11.1"
