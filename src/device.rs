@@ -65,6 +65,13 @@ pub struct TapeDevice {
 
 impl TapeDevice {
     /// Open a tape device for reading and writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TapeError::Io`] if the device file cannot be opened — for
+    /// example if `path` does not exist, the process lacks permission, or no
+    /// tape is loaded and the drive blocks indefinitely (the open may not
+    /// return until a cartridge is present).
     pub fn open(path: &Path) -> Result<Self, TapeError> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         Ok(Self { file })
@@ -91,6 +98,12 @@ impl TapeDevice {
     /// let mut drive = TapeDevice::open(Path::new("/dev/nst0")).unwrap();
     /// drive.raw_op(MTRETEN, 1).unwrap(); // re-tension the tape
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TapeError::UnknownOperation`] if `op` is not one of the
+    /// `MT*` constants exported from this crate. Returns an error if the
+    /// ioctl fails (drive offline, invalid argument, hardware error, etc.).
     pub fn raw_op(&self, op: i16, count: i32) -> Result<(), TapeError> {
         if !ioctl::is_known_op(op) {
             return Err(TapeError::UnknownOperation(op));

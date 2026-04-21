@@ -144,12 +144,20 @@ pub trait Tape: Read + Write {
     ///
     /// Equivalent to the `mt rewind` shell command. After this call, the next
     /// read or write starts at the very first record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn rewind(&mut self) -> Result<(), TapeError>;
 
     /// Seek forward to the end of all recorded data (EOD — end of data).
     ///
     /// Positions the tape just past the last written filemark, ready to
     /// append new data. Equivalent to `mt eom`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn seek_to_eod(&mut self) -> Result<(), TapeError>;
 
     /// Space over `count` filemarks, forward (positive) or backward (negative).
@@ -161,6 +169,11 @@ pub trait Tape: Read + Write {
     /// second, call `space_filemarks(1)` after rewinding.
     ///
     /// Equivalent to `mt fsf N` (forward) or `mt bsf N` (backward).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline, the spacing operation runs
+    /// past EOD, or a hardware error occurs.
     fn space_filemarks(&mut self, count: i32) -> Result<(), TapeError>;
 
     /// Space over `count` records (individual write blocks), forward or backward.
@@ -170,6 +183,11 @@ pub trait Tape: Read + Write {
     /// low-level recovery or diagnostics.
     ///
     /// Equivalent to `mt fsr N` / `mt bsr N`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline, the spacing operation runs
+    /// past EOD, or a hardware error occurs.
     fn space_records(&mut self, count: i32) -> Result<(), TapeError>;
 
     /// Write `count` filemarks at the current position.
@@ -179,6 +197,12 @@ pub trait Tape: Read + Write {
     /// logical end of the archive — the POSIX and GNU `tar` convention.
     ///
     /// Equivalent to `mt weof N`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TapeError::WriteProtected`] if the cartridge is
+    /// write-protected. Returns an error if the drive is offline, the tape is
+    /// full, or a hardware error occurs.
     fn write_filemarks(&mut self, count: u32) -> Result<(), TapeError>;
 
     /// Seek to a specific logical block number.
@@ -186,6 +210,12 @@ pub trait Tape: Read + Write {
     /// This uses the SCSI `MTSEEK` operation, which accepts a 32-bit block
     /// count. Block numbers larger than [`i32::MAX`] (≈ 2.1 billion) return
     /// [`TapeError::BlockNumberTooLarge`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TapeError::BlockNumberTooLarge`] if `block` exceeds
+    /// [`i32::MAX`]. Returns an error if the drive is offline, the block
+    /// number is beyond EOD, or a hardware error occurs.
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError>;
 
     /// Set the fixed block (record) size in bytes.
@@ -195,6 +225,10 @@ pub trait Tape: Read + Write {
     /// deployments use variable-length mode. Fixed-size mode can improve
     /// performance on some drives but requires every write to be exactly
     /// `bytes` long.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn set_block_size(&mut self, bytes: u32) -> Result<(), TapeError>;
 
     /// Execute a SCSI LOAD command.
@@ -202,20 +236,36 @@ pub trait Tape: Read + Write {
     /// Instructs the drive to load the cartridge into the read/write
     /// mechanism. Usually called automatically by the drive on insertion;
     /// explicit use is needed with tape libraries or after an `unload`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn load(&mut self) -> Result<(), TapeError>;
 
     /// Execute a SCSI UNLOAD command (eject the cartridge).
     ///
     /// The drive rewinds and then ejects the tape. Equivalent to `mt eject`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn unload(&mut self) -> Result<(), TapeError>;
 
     /// Lock the drive door, preventing ejection.
     ///
     /// Call this at the start of a write session to prevent accidental
     /// ejection. Always pair with [`unlock`](Tape::unlock).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn lock(&mut self) -> Result<(), TapeError>;
 
     /// Unlock the drive door.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive is offline or a hardware error occurs.
     fn unlock(&mut self) -> Result<(), TapeError>;
 
     /// Query the drive for its current status via `MTIOCGET`.
@@ -224,6 +274,11 @@ pub trait Tape: Read + Write {
     /// and a set of [`StatusFlags`] (online, BOT, EOT, write-protected, …).
     /// This is the primary way to check whether a tape is write-protected
     /// before starting a write session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ioctl fails (e.g. drive not present or a
+    /// hardware error).
     fn status(&mut self) -> Result<TapeStatus, TapeError>;
 
     /// Return the current logical block position via `MTIOCPOS`.
@@ -231,6 +286,11 @@ pub trait Tape: Read + Write {
     /// The returned value is an opaque block number that can be saved and
     /// later passed to [`seek_block`](Tape::seek_block) to return to this
     /// exact position. Subject to the 32-bit limit documented on `seek_block`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive does not support absolute block
+    /// addressing (`MTIOCPOS`), is offline, or a hardware error occurs.
     fn position(&mut self) -> Result<u64, TapeError>;
 
     /// Physically erase the tape from the current position to EOT.
@@ -254,5 +314,11 @@ pub trait Tape: Read + Write {
     /// before calling this method.
     ///
     /// Equivalent to `mt erase` (long) or `mt erase 0` (short).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TapeError::WriteProtected`] if the cartridge is
+    /// write-protected. Returns an error if the drive is offline or a hardware
+    /// error occurs.
     fn erase(&mut self, long_erase: bool) -> Result<(), TapeError>;
 }
