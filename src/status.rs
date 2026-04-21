@@ -103,37 +103,47 @@ impl StatusFlags {
     ///
     /// This flag is transient — it reflects the outcome of the most recent
     /// spacing or read call and should be checked immediately after that call.
+    #[must_use]
     pub fn is_eof(self) -> bool { self.contains(Self::EOF) }
 
     /// Returns `true` if the tape is positioned at the physical beginning
     /// of the medium (BOT).
+    #[must_use]
     pub fn is_bot(self) -> bool { self.contains(Self::BOT) }
 
     /// Returns `true` if the tape is at or past the physical end of the
     /// medium (EOT — early-warning zone before the actual end of tape).
+    #[must_use]
     pub fn is_eot(self) -> bool { self.contains(Self::EOT) }
 
     /// Returns `true` if the tape is at the logical end of recorded data
     /// (EOD): no data has been written past this point.
+    #[must_use]
     pub fn is_eod(self) -> bool { self.contains(Self::EOD) }
 
     /// Returns `true` if the loaded cartridge is write-protected.
+    #[must_use]
     pub fn is_write_protected(self) -> bool { self.contains(Self::WR_PROT) }
 
     /// Returns `true` if the drive is online (a cartridge is loaded and the
     /// drive is ready to accept commands).
+    #[must_use]
     pub fn is_online(self) -> bool { self.contains(Self::ONLINE) }
 
     /// Returns `true` if the drive door is open (no cartridge loaded).
+    #[must_use]
     pub fn is_door_open(self) -> bool { self.contains(Self::DR_OPEN) }
 
     /// Returns `true` if the drive is requesting a cleaning cartridge.
+    #[must_use]
     pub fn is_cleaning_requested(self) -> bool { self.contains(Self::CLN) }
 
     /// Returns `true` if a setmark was encountered during the last operation.
+    #[must_use]
     pub fn is_setmark(self) -> bool { self.contains(Self::SM) }
 
     /// Returns `true` if immediate report mode is enabled.
+    #[must_use]
     pub fn is_immediate_report(self) -> bool { self.contains(Self::IM_REP_EN) }
 }
 

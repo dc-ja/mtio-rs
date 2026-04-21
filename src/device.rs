@@ -160,18 +160,19 @@ impl Tape for TapeDevice {
     fn write_filemarks(&mut self, count: u32) -> Result<(), TapeError> {
         // MTWEOF accepts an i32; saturate silently — writing 2^31 filemarks
         // is not a realistic scenario.
+        #[allow(clippy::cast_possible_wrap)] // saturated to i32::MAX above
         self.do_op(ioctl::MTWEOF, count.min(i32::MAX as u32) as i32)
     }
 
     fn seek_block(&mut self, block: u64) -> Result<(), TapeError> {
-        if block > i32::MAX as u64 {
-            return Err(TapeError::BlockNumberTooLarge(block));
-        }
-        self.do_op(ioctl::MTSEEK, block as i32)
+        let count = i32::try_from(block).map_err(|_| TapeError::BlockNumberTooLarge(block))?;
+        self.do_op(ioctl::MTSEEK, count)
     }
 
     fn set_block_size(&mut self, bytes: u32) -> Result<(), TapeError> {
-        self.do_op(ioctl::MTSETBLK, bytes as i32)
+        // MTSETBLK accepts i32; values above i32::MAX are not valid block sizes.
+        let count = i32::try_from(bytes).unwrap_or(i32::MAX);
+        self.do_op(ioctl::MTSETBLK, count)
     }
 
     fn load(&mut self) -> Result<(), TapeError> {
@@ -207,6 +208,7 @@ impl Tape for TapeDevice {
             block_number: raw.mt_blkno,
             // mt_dsreg encodes the density code in bits 24–31 and the block
             // size in bits 0–23 (MT_ST_BLKSIZE_MASK = 0x00ff_ffff).
+            #[allow(clippy::cast_sign_loss)] // masked to 0x00ff_ffff, always non-negative
             block_size: (raw.mt_dsreg & 0x00ff_ffff) as u32,
             flags: StatusFlags::from_bits_truncate(raw.mt_gstat),
         })
@@ -215,10 +217,11 @@ impl Tape for TapeDevice {
     fn position(&mut self) -> Result<u64, TapeError> {
         let mut raw = MtPos { mt_blkno: 0 };
         unsafe { ioctl::mtiocpos_raw(self.file.as_raw_fd(), &mut raw) }?;
+        #[allow(clippy::cast_sign_loss)] // negative means unsupported; callers treat it as opaque
         Ok(raw.mt_blkno as u64)
     }
 
     fn erase(&mut self, mode: EraseMode) -> Result<(), TapeError> {
-        self.do_op(ioctl::MTERASE, (mode == EraseMode::Long) as i32)
+        self.do_op(ioctl::MTERASE, i32::from(mode == EraseMode::Long))
     }
 }

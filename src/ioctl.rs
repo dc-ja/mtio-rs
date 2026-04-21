@@ -222,6 +222,7 @@ pub fn is_known_op(op: i16) -> bool {
 /// };
 /// ```
 #[repr(C)]
+#[allow(clippy::struct_field_names)] // field names mirror the kernel `struct mtop` exactly
 pub struct MtOp {
     /// The operation to perform (one of the `MT*` constants in this module).
     pub mt_op: i16,
@@ -258,6 +259,7 @@ impl MtOp {
 /// The most useful field for callers is `mt_gstat`, whose bits are decoded by
 /// [`StatusFlags`](crate::status::StatusFlags).
 #[repr(C)]
+#[allow(clippy::struct_field_names)] // field names mirror the kernel `struct mtget` exactly
 pub struct MtGet {
     /// Drive type (manufacturer-specific; useful for distinguishing LTO
     /// generations or other drive families).
