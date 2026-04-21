@@ -105,14 +105,24 @@ use std::io::{Read, Write};
 /// ## Reading across filemarks
 ///
 /// `Read::read` returns `Ok(0)` at a filemark boundary — identical to EOF on
-/// a regular file. Issuing another `read` without spacing will keep returning
-/// `Ok(0)`.
+/// a regular file. The Linux `st` driver automatically advances past the
+/// filemark at that point, so the next `read` call returns data from the
+/// following tape file without any `space_filemarks` call.
+///
+/// A double filemark marks the logical end of archive (EOA). Reading through
+/// it produces two `Ok(0)` returns (one per filemark), after which the head
+/// is on blank tape immediately following a filemark. In that state the driver
+/// returns `Ok(0)` twice more before returning
+/// `Err(`[`TapeError::Io`]`)` (`EIO`) to signal true EOD. On a completely
+/// blank tape (never written), where no filemark precedes the blank region,
+/// `EIO` is returned immediately without any `Ok(0)` first.
 ///
 /// ```text
-/// [record][record][FM][record][record][FM][FM]
-///                  ^                   ^
-///              read → 0            read → 0
-///          space_filemarks(1)   (logical end of archive)
+/// [record][record][FM][record][record][FM][FM][blank tape ...]
+///                  ^                   ^    ^   ^    ^    ^
+///              read → 0            read → 0 |   0    0   EIO
+///         (next read starts             read → 0        (EOD)
+///          at following file)       (EOA convention)
 /// ```
 ///
 /// ## Writing across filemarks

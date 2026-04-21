@@ -90,13 +90,14 @@ fn main() -> Result<(), mtio::TapeError> {
     let mut tmp = [0u8; 4096];
     loop {
         let n = drive.read(&mut tmp)?;
-        if n == 0 { break; }         // filemark reached
+        if n == 0 { break; }         // filemark reached; driver auto-advances
         buf.extend_from_slice(&tmp[..n]);
     }
     println!("file 0: {} bytes", buf.len());
 
-    // Step past the filemark and read file 1.
-    drive.space_filemarks(1)?;
+    // The driver has already advanced past the filemark — the next read
+    // starts at file 1 immediately. Do NOT call space_filemarks(1) here;
+    // that would skip file 1 entirely.
     // ... repeat read loop ...
     Ok(())
 }
