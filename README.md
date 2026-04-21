@@ -204,22 +204,34 @@ Any function that accepts `&mut impl Tape` works with both `TapeDevice` and
 
 ## API overview
 
-| Method               | ioctl / operation | Description                          |
-| -------------------- | ----------------- | ------------------------------------ |
-| `rewind()`           | `MTREW`           | Seek to BOT                          |
-| `seek_to_eod()`      | `MTEOM`           | Seek to end of recorded data         |
-| `space_filemarks(n)` | `MTFSF` / `MTBSF` | Space ±n filemarks                   |
-| `space_records(n)`   | `MTFSR` / `MTBSR` | Space ±n records                     |
-| `write_filemarks(n)` | `MTWEOF`          | Write n filemarks                    |
-| `seek_block(n)`      | `MTSEEK`          | Seek to logical block n (≤ i32::MAX) |
-| `set_block_size(n)`  | `MTSETBLK`        | Set fixed block size (0 = variable)  |
-| `load()`             | `MTLOAD`          | SCSI LOAD                            |
-| `unload()`           | `MTUNLOAD`        | SCSI UNLOAD / eject                  |
-| `lock()`             | `MTLOCK`          | Lock drive door                      |
-| `unlock()`           | `MTUNLOCK`        | Unlock drive door                    |
-| `status()`           | `MTIOCGET`        | Read drive status and flags          |
-| `position()`         | `MTIOCPOS`        | Read absolute logical block position |
-| `erase()`            | `MTERASE`         | Physically erase from current position to EOT |
+All methods below are part of the [`Tape`] trait and are available on both
+`TapeDevice` and `MockTape`.
+
+| Method                   | ioctl / operation | Description                          |
+| ------------------------ | ----------------- | ------------------------------------ |
+| `rewind()`               | `MTREW`           | Seek to BOT                          |
+| `seek_to_eod()`          | `MTEOM`           | Seek to end of recorded data         |
+| `space_filemarks(n)`     | `MTFSF` / `MTBSF` | Space ±n filemarks                   |
+| `space_records(n)`       | `MTFSR` / `MTBSR` | Space ±n records                     |
+| `write_filemarks(n)`     | `MTWEOF`          | Write n filemarks                    |
+| `seek_block(n)`          | `MTSEEK`          | Seek to logical block n (≤ i32::MAX) |
+| `set_block_size(n)`      | `MTSETBLK`        | Set fixed block size (0 = variable)  |
+| `load()`                 | `MTLOAD`          | SCSI LOAD                            |
+| `unload()`               | `MTUNLOAD`        | SCSI UNLOAD / eject                  |
+| `lock()`                 | `MTLOCK`          | Lock drive door                      |
+| `unlock()`               | `MTUNLOCK`        | Unlock drive door                    |
+| `status()`               | `MTIOCGET`        | Read drive status and flags          |
+| `position()`             | `MTIOCPOS`        | Read absolute logical block position |
+| `erase(long_erase)`      | `MTERASE`         | Physically erase from current position to EOT |
+
+### TapeDevice-only
+
+The following method is only available on `TapeDevice`, not through the `Tape`
+trait, and has no `MockTape` equivalent.
+
+| Method              | ioctl / operation | Description                                       |
+| ------------------- | ----------------- | ------------------------------------------------- |
+| `raw_op(op, count)` | `MTIOCTOP`        | Issue any `MTIOCTOP` operation by code directly. Use the `MT*` constants exported from this crate. |
 
 ## Block mode
 
