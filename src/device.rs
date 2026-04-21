@@ -93,11 +93,14 @@ impl TapeDevice {
     /// # Example
     ///
     /// ```no_run
-    /// use mtio::{TapeDevice, MTRETEN};
+    /// use mtio::{TapeDevice, TapeError, MTRETEN};
     /// use std::path::Path;
     ///
-    /// let mut drive = TapeDevice::open(Path::new("/dev/nst0")).unwrap();
-    /// drive.raw_op(MTRETEN, 1).unwrap(); // re-tension the tape
+    /// # fn main() -> Result<(), TapeError> {
+    /// let mut drive = TapeDevice::open(Path::new("/dev/nst0"))?;
+    /// drive.raw_op(MTRETEN, 1)?; // re-tension the tape
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
