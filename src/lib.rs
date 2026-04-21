@@ -325,8 +325,7 @@ pub trait Tape: Read + Write {
     /// [`rewind`](Tape::rewind) and [`space_filemarks`](Tape::space_filemarks)
     /// before calling this method.
     ///
-    /// Equivalent to `mt erase` ([`EraseMode::Long`]) or `mt erase 0`
-    /// ([`EraseMode::Short`]).
+    /// Calling this with [`EraseMode::Long`] is equivalent to `mt erase`.
     ///
     /// # Errors
     ///
