@@ -37,6 +37,30 @@ use crate::{EraseMode, Tape};
 
 /// In-memory tape simulation. See the [module documentation](self) for the
 /// model and behavioural contract.
+///
+/// # Example
+///
+/// ```
+/// use mtio::{MockTape, Tape, TapeError};
+/// use std::io::{Read, Write};
+///
+/// # fn main() -> Result<(), TapeError> {
+/// let mut tape = MockTape::new();
+///
+/// // Write two tape files separated by a filemark.
+/// tape.write_all(b"hello")?;
+/// tape.write_filemarks(1)?;
+/// tape.write_all(b"world")?;
+/// tape.write_filemarks(2)?; // double filemark = end of archive
+///
+/// // Rewind and read back.
+/// tape.rewind()?;
+/// let mut buf = vec![0u8; 64];
+/// let n = tape.read(&mut buf)?;
+/// assert_eq!(&buf[..n], b"hello");
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct MockTape {
     /// The tape contents, one entry per tape file (data between filemarks).
