@@ -137,10 +137,12 @@ prior data unreachable, not the filemark count itself. The magnetically
 recorded data past the new EOD is not destroyed — it simply cannot be reached
 by normal means. Fast, minimal wear.
 
-**Physical erase** — `erase()` issues `MTERASE`, causing the drive's erase
-head to traverse the full remaining tape. All data from the current position
-to EOT is permanently destroyed. This is slow, high-wear, and irreversible.
-It is a magnetic erase, not a cryptographic secure erase.
+**Physical erase** — `erase(long_erase)` issues `MTERASE`. With
+`long_erase = true`, the drive's erase head traverses the full remaining tape,
+permanently destroying all data from the current position to EOT (slow,
+high-wear). With `long_erase = false`, only an EOD marker is written at the
+current position; prior data is left magnetically intact but unreachable (fast,
+low-wear). Both forms are irreversible. Neither is a cryptographic secure erase.
 
 ```rust
 use mtio::{TapeDevice, Tape};
@@ -160,7 +162,7 @@ fn main() -> Result<(), mtio::TapeError> {
     // Physical erase from the start of file 2 to EOT.
     drive.rewind()?;
     drive.space_filemarks(2)?;
-    drive.erase()?; // WARNING: slow, destructive, high-wear
+    drive.erase(true)?; // WARNING: long erase — slow, destructive, high-wear
 
     Ok(())
 }

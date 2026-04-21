@@ -201,7 +201,7 @@ impl Tape for TapeDevice {
         Ok(raw.mt_blkno as u64)
     }
 
-    fn erase(&mut self) -> Result<(), TapeError> {
-        self.do_op(ioctl::MTERASE, 1)
+    fn erase(&mut self, long_erase: bool) -> Result<(), TapeError> {
+        self.do_op(ioctl::MTERASE, long_erase as i32)
     }
 }

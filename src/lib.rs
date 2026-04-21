@@ -232,10 +232,15 @@ pub trait Tape: Read + Write {
 
     /// Physically erase the tape from the current position to EOT.
     ///
-    /// This is a **destructive, time-consuming, high-wear operation**. The
-    /// erase head traverses the full remaining tape, which takes minutes to
-    /// hours depending on tape length. All data from the current position
-    /// onwards is permanently destroyed.
+    /// This is a **destructive, high-wear operation**. All data from the
+    /// current position onwards is permanently destroyed.
+    ///
+    /// If `long_erase` is `true`, the erase head traverses the full remaining
+    /// tape (a long erase), which takes minutes to hours depending on tape
+    /// length but provides the most thorough erasure. If `false`, a short erase
+    /// is performed, which writes only an EOD marker at the current position;
+    /// it is fast but leaves prior data magnetically intact (though unreachable
+    /// by normal means).
     ///
     /// This is **not** a cryptographic erase; it is a magnetic erase that
     /// renders data unreadable by normal means. For security-sensitive data,
@@ -245,6 +250,6 @@ pub trait Tape: Read + Write {
     /// [`rewind`](Tape::rewind) and [`space_filemarks`](Tape::space_filemarks)
     /// before calling this method.
     ///
-    /// Equivalent to `mt erase`.
-    fn erase(&mut self) -> Result<(), TapeError>;
+    /// Equivalent to `mt erase` (long) or `mt erase 0` (short).
+    fn erase(&mut self, long_erase: bool) -> Result<(), TapeError>;
 }
