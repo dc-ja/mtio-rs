@@ -156,6 +156,20 @@ use std::io::{Read, Write};
 /// On real tape, any write implicitly discards everything recorded after the
 /// current position. Rewind before writing to overwrite the tape from the
 /// start.
+///
+/// ## Implementing this trait
+///
+/// `Tape` is intentionally open for downstream implementation. The primary
+/// use-case is writing test doubles (mock or simulated drives) without a
+/// dependency on real hardware, mirroring how [`MockTape`] is used inside
+/// this crate.
+///
+/// **Stability caveat**: because the trait is not sealed, adding a new
+/// required method is a breaking change for any downstream implementor.
+/// Future versions of this crate may add methods with default
+/// implementations to avoid this, but that is not guaranteed. If you
+/// implement `Tape` on your own type, be prepared to add new methods on
+/// minor-version upgrades.
 pub trait Tape: Read + Write {
     /// Rewind to the physical beginning of the tape (BOT — beginning of tape).
     ///
