@@ -150,6 +150,24 @@ impl StatusFlags {
     pub fn is_cleaning_requested(&self) -> bool {
         self.has(Self::CLN)
     }
+
+    /// Returns `true` if a setmark was encountered during the last operation.
+    ///
+    /// Setmarks are a SCSI-2 positioning feature used on some DDS/DAT drives
+    /// to group tape files into higher-level sets. Rarely encountered on modern
+    /// drives; LTO drives typically do not support setmarks at all.
+    pub fn is_setmark(&self) -> bool {
+        self.has(Self::SM)
+    }
+
+    /// Returns `true` if immediate report mode is enabled.
+    ///
+    /// In immediate report mode the drive returns status before completing long
+    /// operations. This flag reflects drive configuration; it is not commonly
+    /// used in backup applications.
+    pub fn is_immediate_report(&self) -> bool {
+        self.has(Self::IM_REP_EN)
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +185,8 @@ mod tests {
         assert!(!f.is_online());
         assert!(!f.is_door_open());
         assert!(!f.is_cleaning_requested());
+        assert!(!f.is_setmark());
+        assert!(!f.is_immediate_report());
     }
 
     #[test]
@@ -179,8 +199,10 @@ mod tests {
             (StatusFlags::EOD,    StatusFlags::is_eod),
             (StatusFlags::WR_PROT, StatusFlags::is_write_protected),
             (StatusFlags::ONLINE, StatusFlags::is_online),
-            (StatusFlags::DR_OPEN, StatusFlags::is_door_open),
-            (StatusFlags::CLN,    StatusFlags::is_cleaning_requested),
+            (StatusFlags::DR_OPEN,   StatusFlags::is_door_open),
+            (StatusFlags::CLN,       StatusFlags::is_cleaning_requested),
+            (StatusFlags::SM,        StatusFlags::is_setmark),
+            (StatusFlags::IM_REP_EN, StatusFlags::is_immediate_report),
         ];
 
         for &(bit, check) in cases {
